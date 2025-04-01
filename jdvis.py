@@ -1,0 +1,177 @@
+import matplotlib.pyplot as plt
+from astropy.coordinates import SkyCoord
+from photutils.aperture import SkyCircularAperture
+
+def plot_unstitched_spectra(results,umlim=None):
+	'''
+	Plot spectra which are not yet stiched to a single array.
+
+	Parameters
+	----------
+	
+	results : dictionary
+		Containing:
+
+			source_name : string
+				Name of the source from the filename.
+
+			RA_centre, Dec_centre, aper_size : Saved as specified above.
+
+			subcube_name : list of string
+				Names of each subcube (used in stitching).
+
+			um : list of arrays
+				2D list containing wavelengths of each subcube.
+
+			flux : list of arrays
+				2D list containing the flux densities of each subcube.
+
+			flux_unc : list of arrays
+				2D list containing the uncertainty on flux densities of each subcube.
+
+	umlim : float
+		Cutoff wavelength limit for the plotting.
+
+	Returns
+	-------
+
+	None
+		Makes plot.
+	'''
+	subcubes  = results['subcube_name']
+
+
+
+	for i,subcube in enumerate(subcubes):
+
+		if umlim:
+			inds = results['um'][i]<umlim
+		else:
+			inds = [True]*len(results['um'][i])
+
+		um = results['um'][i][inds]
+		flux = results['flux'][i][inds]
+		flux_unc = results['flux_unc'][i][inds]
+		plt.errorbar(um,flux,yerr = flux_unc,marker='o',label='%s'%(subcube))
+	plt.xlabel(r'Wavelength ($\mu$m)')
+	plt.minorticks_on()
+	plt.grid(which ='both',alpha=0.3)
+	plt.ylabel('Flux Density (Jy)')
+	plt.legend()
+
+def make_snr_figures(mom0,mom0_unc,wcs_2D,contour_levels=None,contour_cmap='Greys_r',contour_alpha=0.3):
+	'''
+	Make a three panel figure with a moment map, and its uncertainties. Mostly for data inspection.
+
+	Parameters
+	----------
+
+	mom0 : 2D array
+		The moment map.
+
+	mom0_unc : 2D array
+		Uncertainties on the moment map.
+
+	wcs_2D : WCS object
+		WCS of the map.
+
+	contour_levels : list
+		List of values for plt.contour, the values are relevant for the SNR!!
+
+	contour_cmap : string
+		Contour colormap.
+
+	contour_alpha : float
+		Opacity of the contours.
+
+	Returns
+	-------
+
+	fig : Figure instance
+		The figure instance from the plotting.
+
+	ax1, ax2, ax3 : Axes instances
+		The axes instances from the plotting.
+
+	Notes
+	-----
+
+	TO IMPLEMENT: Saving, and cleaner axis labels. 
+
+
+	'''
+	fig = plt.figure(figsize = (16,7))
+
+	ax1 = fig.add_subplot(1, 3, 1, projection=wcs_2D)  
+	ax2 = fig.add_subplot(1, 3, 2, projection=wcs_2D)  
+	ax3 = fig.add_subplot(1, 3, 3, projection=wcs_2D) 
+
+	#plt.subplot(131,projection=wcs_2D)
+	im1 = ax1.imshow(mom0,origin='lower',vmax = 10000)
+
+	cbar1 = fig.colorbar(im1, ax=ax1, location='top', fraction=0.046, pad=0)
+	cbar1.set_label(r'$I_{\nu}$ (MJy sr$^{-1}$)')
+
+
+	if contour_levels:
+		ax1.contour(mom0/mom0_unc,levels=contour_levels ,cmap=contour_cmap,alpha=contour_alpha)
+
+	#plt.subplot(132,projection=wcs_2D)
+	im2 = ax2.imshow(mom0_unc,origin='lower')
+	
+	cbar2 = fig.colorbar(im2, ax=ax2, location='top', fraction=0.046, pad=0)
+	cbar2.set_label(r'$\delta I_{\nu}$ (MJy sr$^{-1}$)')
+
+
+	#plt.subplot(133,projection=wcs_2D)
+	im3 = ax3.imshow(mom0/mom0_unc,origin='lower')
+	cbar3 = fig.colorbar(im3, ax=ax3, location='top', fraction=0.046, pad=0)
+	cbar3.set_label('S/N (unitless)')
+
+	return fig, ax1, ax2, ax3
+
+def plot_apertures(aper_names,aper_sizes,aper_coords,ax,wcs_2D,color='white',aper_alpha=0.4):
+	'''
+	Plot N apertures with names onto a WCS Axes.
+
+	Parameters
+	----------
+
+	aper_names : 1D list of strings
+		Names of apertures.
+
+	aper_sizes : 1D list of floats
+		Sizes of apertures (in arcsec).
+
+	aper_coords : N x 2 list of strings [RA_centre, Dec_centre]
+
+		RA_centre: string
+		J2000 Right Ascension in the format XXhXXmXX.XXs
+
+		Dec_centre: string
+			J2000 Declination in the format +XXdXXmXX.XXs where the sign can be + or -
+	
+	ax : WCSAxes instance
+		Axis to plot on.
+
+	wcs_2D : WCS instance
+		WCS of the plot.
+
+	color : string
+		Color of the plotted apertures.
+
+	aper_alpha : float
+		Opacity of the apertures.
+
+	Returns
+	-------
+
+	None
+		Plots apertures on the plot instance.
+	'''
+	for name, size, (RA,Dec) in zip(aper_names,aper_sizes,aper_coords):
+		aper = define_circular_aperture(RA,Dec,size)
+		aper = aper.to_pixel(wcs_2D)
+		aper.plot(ax=ax,color=color,zorder=5,alpha=aper_alpha)
+		x,y = aper.positions
+		ax.text(x,y,name,va='center',ha='center',color=color)

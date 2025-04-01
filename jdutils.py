@@ -1,0 +1,220 @@
+"""
+Dust with JWST utils scripts.
+@author: Job Vorster, 20 March 2025. 
+Email: jobvorster8@gmail.com
+
+PSF functions were inspired by scripts from @author: Łukasz Tychoniec tychoniec@strw.leidenuniv.nl
+"""
+import pandas as pd
+import numpy as np
+from astropy.coordinates import SkyCoord
+from photutils.aperture import SkyCircularAperture
+from spectres import spectres #Resampling arxiv link: https://arxiv.org/abs/1705.05165
+
+
+def get_JWST_IFU_um(header):
+	'''
+	Returns a wavelength array from an IFU cube ImageHDU header (typically index 1 for MIRI MRS cubes).
+
+	Parameters
+	----------
+
+	header : dictionary
+		The header of the ImageHDU of the IFU cube. Make sure the NAXIS3, CRPIX3, CRVAL3, and CDELT3 columns are located in the header.
+
+	Returns
+	-------
+
+	um : 1D array
+		Array of wavelengths in microns.
+	'''
+	n_chan = np.arange(0,header['NAXIS3'],1)
+	crpix = header['CRPIX3']
+	crval = header['CRVAL3']
+	cdelt = header['CDELT3']
+	um = crval + cdelt*(n_chan-(crpix-1))
+	return um
+
+def is_nan_map(array):
+	'''
+	Checks whether an N-dimensional array consists of ONLY nans.
+
+	Parameters
+	----------
+
+	array: N-D array
+		Any array.
+
+	Returns
+	-------
+
+	is_nan_map: boolean
+		True, if the map is only nans.
+	'''
+	if np.sum(np.isfinite(array.flatten()))==0:
+		return True 
+	else:
+		return False
+
+
+def make_moment_map(data_cube,unc_cube,chan_lower,chan_upper,order=0):
+	'''
+	Makes a moment map from a data cube. The order can be specified as 0, 1, 2 (ONLY 0 IMPLEMENTED)!
+
+	Parameters
+	----------
+
+	data_cube : 3D array
+		A spectral cube.
+
+	unc_cube : 3D array
+		The corresponding uncertainty cube.
+
+	chan_lower : integer
+		Lower limit for the channels for the moment map.
+
+	chan_upper : integer
+		Upper limit for the channels for the moment map.
+
+	order : integer
+		Order of the moment map.
+
+	Returns
+	-------
+
+	mom0 : 2D array
+		The moment map.
+
+	mom0_unc : 2D array
+		The corresponding uncertainty to the moment map.
+	'''
+	if order == 0:
+		mom0 = np.nansum(data_cube[chan_lower:chan_upper+1,:,:],axis=0)
+		mom0_unc = np.sqrt(np.nansum(unc_cube[chan_lower:chan_upper+1,:,:]**2,axis=0))
+		return mom0,mom0_unc
+	else:
+		raise ValueError('Higher order moments have not yet been implemented yet, only moment 0.')
+
+def get_subcube_name(filename):
+	'''
+	Get the name for the MIRI MRS subcube, assuming naming convention 'SOURCE_ch4-short_s3d_LSRcorr.fits'
+
+	Parameters
+	----------
+
+	filename : string
+		Cube filename
+
+	Returns
+	-------
+
+	subcube_name : string
+		Name of the subcube (e.g. ch4-short)
+
+	'''
+	subcube_name = filename.split('/')[-1].split('_')[1]
+	return subcube_name
+
+def get_source_name(filename):
+	'''
+	Get the name for the MIRI MRS source, assuming naming convention 'SOURCE_ch4-short_s3d_LSRcorr.fits'
+
+	Parameters
+	----------
+
+	filename : string
+		Cube filename
+
+	Returns
+	-------
+
+	source_name : string
+		Name of the source (e.g. HH211)
+
+	'''
+	source_name = filename.split('/')[-1].split('_')[0]
+	return source_name
+
+def define_circular_aperture(RA_centre, Dec_centre,size_arcsec):
+	'''
+	Short function to make a circular aperture of a specific radius.
+
+	Parameters
+	----------
+
+	RA_centre: string
+		J2000 Right Ascension in the format XXhXXmXX.XXs
+
+	Dec_centre: string
+		J2000 Declination in the format +XXdXXmXX.XXs where the sign can be + or -
+	
+	Returns
+	-------
+	
+	aper: SkyAperture object
+		photutils circular aperture with the relevant sky coordinates.
+
+	'''
+	position = SkyCoord(ra=RA_centre, dec=Dec_centre, unit='arcsec')
+	aper = SkyCircularAperture(position, size_arcsec*u.arcsec)
+	return aper
+
+def get_JWST_PSF(um):
+	'''
+	Returns the JWST PSF from Law, D.R. et. al. 2023 for a specified wavelength.
+
+	Parameters
+	----------
+
+	um: float
+		Wavelength in microns.
+
+	Returns
+	-------
+	
+	fwhm: float 
+		Full width at half maximum in arcsec.
+	
+	'''
+	fwhm = 0.033*um+0.106
+	return fwhm
+
+def read_aperture_ini(filename,sep=','):
+	'''
+	Read an aperture ini file. Returns the names, sizes (in arcsec) and position of the aperture.
+
+	Parameters
+	----------
+
+	filename : string
+		Filename of the ini file.
+
+	sep : string
+		Separator for pandas.read_csv.
+
+	Returns
+	-------
+
+	aper_names : 1D list of string
+		Names of apertures.
+
+	aper_sizes : 1D list of float
+		Aperture sizes in arcsec.
+
+	coord_list : N x 2 list of string.
+
+		RA_centre: string
+		J2000 Right Ascension in the format XXhXXmXX.XXs
+
+		Dec_centre: string
+		J2000 Declination in the format +XXdXXmXX.XXs where the sign can be + or -
+	'''
+	
+	df = pd.read_csv(filename,sep=sep)
+	aper_names = df['Name'].values
+	aper_sizes = df['Size(arcsec)'].values
+	ras = df['R.A.(J2000)'].values
+	decs = df['Dec.(J2000)'].values
+	coord_list = [[x,y] for (x,y) in zip(ras,decs)]
+
+	return aper_names,aper_sizes,coord_list
