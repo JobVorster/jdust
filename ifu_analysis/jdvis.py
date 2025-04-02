@@ -61,6 +61,79 @@ def plot_unstitched_spectra(results,umlim=None):
 	plt.legend()
 
 
+def get_image_world_extent(img,wcs_2D):
+	'''
+	Retrieve the corners of an image in world coordinates.
+
+	Parameters
+	----------
+
+	img : 2D array
+		Image
+
+	wcs_2D : wcs object
+		The wcs corresponding to the image.
+
+	Returns
+	-------
+	
+	world_bl : 1D array
+		Coordinates of the bottom left corner in world coordinates.
+
+	world_br : 1D array
+		Coordinates of the bottom right corner in world coordinates.
+
+	world_tl : 1D array
+		Coordinates of the top left corner in world coordinates.
+
+	world_tr : 1D array
+		Coordinates of the top right corner in world coordinates.
+
+	'''
+	shp = np.shape(img)
+	x_inds = np.arange(0,shp[0])
+	y_inds = np.arange(0,shp[1])
+
+	#The four corners are defined as follows:
+	bottom_left = [x_inds[0],y_inds[0]]
+	bottom_right = [x_inds[-1],y_inds[0]]
+	top_left = [x_inds[0],y_inds[-1]]
+	top_right = [x_inds[-1],y_inds[-1]]
+
+	world_bl = np.array(wcs_2D.wcs_pix2world(bottom_left[0],bottom_left[1] ,1))
+	world_br = np.array(wcs_2D.wcs_pix2world(bottom_right[0],bottom_right[1] ,1))
+	world_tl = np.array(wcs_2D.wcs_pix2world(top_left[0],top_left[1] ,1))
+	world_tr = np.array(wcs_2D.wcs_pix2world(top_right[0],top_right[1] ,1))
+	return world_bl,world_br,world_tl,world_tr
+
+def get_image_pixel_extent(wcs_2D,world_bl,world_br,world_tl,world_tr):
+
+	x_arr = []
+	y_arr = []
+
+	#This is so lazy, sorry. Clean it up if you want!
+
+	x_pix,y_pix = np.array(wcs_2D.wcs_world2pix(world_bl[0],world_bl[1],1))
+	x_arr.append(x_pix)
+	y_arr.append(y_pix)
+
+	x_pix,y_pix = np.array(wcs_2D.wcs_world2pix(world_br[0],world_br[1],1))
+	x_arr.append(x_pix)
+	y_arr.append(y_pix)
+
+	x_pix,y_pix = np.array(wcs_2D.wcs_world2pix(world_tl[0],world_tl[1],1))
+	x_arr.append(x_pix)
+	y_arr.append(y_pix)
+
+	x_pix,y_pix = np.array(wcs_2D.wcs_world2pix(world_tr[0],world_tr[1],1))
+	x_arr.append(x_pix)
+	y_arr.append(y_pix)
+
+	xlim = [min(x_arr),max(x_arr)]
+	ylim = [min(y_arr),max(y_arr)]
+	return xlim,ylim
+
+
 def generate_image_grid(shp,figsize,wcs_arr=None):
 	'''
 	Generate a grid of 2D images of specified shape and figsize, with the option to set the wcs projection for each subplot.

@@ -2,15 +2,14 @@
 Dust with JWST utils scripts.
 @author: Job Vorster, 20 March 2025. 
 Email: jobvorster8@gmail.com
-
-PSF functions were inspired by scripts from @author: Łukasz Tychoniec tychoniec@strw.leidenuniv.nl
 """
 import pandas as pd
 import numpy as np
 from astropy.coordinates import SkyCoord
 from photutils.aperture import SkyCircularAperture
 from spectres import spectres #Resampling arxiv link: https://arxiv.org/abs/1705.05165
-
+from astropy.io import fits
+from astropy.wcs import WCS
 
 def get_JWST_IFU_um(header):
 	'''
@@ -55,34 +54,7 @@ def is_nan_map(array):
 		return True 
 	else:
 		return False
-		
-def get_wcs_arr(filenames):
-	'''
-	Get an array of 2D wcs projections for a list of cubes. This function assumes hdu[1] contains the science data, 
-	and that there is a spectral axis that needs to be dropped.
 
-	Parameters
-	----------
-
-	filenames : list of string
-		Filenames of fits files.
-
-	Returns
-	-------
-
-	wcs_arr : list of wcs
-		List of projections.
-	'''
-	wcs_arr = []
-	for fn in filenames:
-		hdu = fits.open(fn)
-
-		hdr = hdu[1].header
-
-		wcs = WCS(hdr)
-		wcs_2D = wcs.dropaxis(2)
-		wcs_arr.append(wcs_2D)
-	return wcs_arr
 
 def make_moment_map(data_cube,unc_cube,chan_lower,chan_upper,order=0):
 	'''
@@ -121,6 +93,35 @@ def make_moment_map(data_cube,unc_cube,chan_lower,chan_upper,order=0):
 		return mom0,mom0_unc
 	else:
 		raise ValueError('Higher order moments have not yet been implemented yet, only moment 0.')
+
+def get_wcs_arr(filenames):
+	'''
+	Get an array of 2D wcs projections for a list of cubes. This function assumes hdu[1] contains the science data, 
+	and that there is a spectral axis that needs to be dropped.
+
+	Parameters
+	----------
+
+	filenames : list of string
+		Filenames of fits files.
+
+	Returns
+	-------
+
+	wcs_arr : list of wcs
+		List of projections.
+	'''
+	wcs_arr = []
+	for fn in filenames:
+		hdu = fits.open(fn)
+
+		hdr = hdu[1].header
+
+		wcs = WCS(hdr)
+		wcs_2D = wcs.dropaxis(2)
+		wcs_arr.append(wcs_2D)
+	return wcs_arr
+
 
 def get_subcube_name(filename):
 	'''
