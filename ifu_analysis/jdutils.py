@@ -55,7 +55,34 @@ def is_nan_map(array):
 		return True 
 	else:
 		return False
+		
+def get_wcs_arr(filenames):
+	'''
+	Get an array of 2D wcs projections for a list of cubes. This function assumes hdu[1] contains the science data, 
+	and that there is a spectral axis that needs to be dropped.
 
+	Parameters
+	----------
+
+	filenames : list of string
+		Filenames of fits files.
+
+	Returns
+	-------
+
+	wcs_arr : list of wcs
+		List of projections.
+	'''
+	wcs_arr = []
+	for fn in filenames:
+		hdu = fits.open(fn)
+
+		hdr = hdu[1].header
+
+		wcs = WCS(hdr)
+		wcs_2D = wcs.dropaxis(2)
+		wcs_arr.append(wcs_2D)
+	return wcs_arr
 
 def make_moment_map(data_cube,unc_cube,chan_lower,chan_upper,order=0):
 	'''
