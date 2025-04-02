@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import numpy as np
 from astropy.coordinates import SkyCoord
 from photutils.aperture import SkyCircularAperture
 
@@ -59,6 +60,46 @@ def plot_unstitched_spectra(results,umlim=None):
 	plt.ylabel('Flux Density (Jy)')
 	plt.legend()
 
+
+def generate_image_grid(shp,figsize,wcs_arr=None):
+	'''
+	Generate a grid of 2D images of specified shape and figsize, with the option to set the wcs projection for each subplot.
+
+	Parameters
+	----------
+
+	shp : tuple
+		A tuple (Nrows, Ncols) setting the subplot grid.
+
+	figsize : tuple
+		Figure size
+
+	wcs_arr : 1D array of wcs instance
+		Projections for each plot.
+
+	Returns
+	-------
+
+	fig : Figure instance
+		The figure object.
+
+	axs : array of Axes
+		An array of axes objects for further changes.
+	'''
+	fig = plt.figure(figsize = figsize)
+	if len(shp) == 2:
+		Nrows, Ncols = shp
+		for index in range(1,Nrows*Ncols+1):
+			if wcs_arr:
+				fig.add_subplot(Nrows,Ncols,index,projection = wcs_arr[index-1])
+			else:
+				fig.add_subplot(Nrows,Ncols,index)
+	else:
+		ValueError('Incorrect shape for grid, shape should either be (Nrows,Ncols)!')
+
+	axs = np.reshape(fig.axes,shp)
+	return fig, axs
+	
 def make_snr_figures(mom0,mom0_unc,wcs_2D,contour_levels=None,contour_cmap='Greys_r',contour_alpha=0.3):
 	'''
 	Make a three panel figure with a moment map, and its uncertainties. Mostly for data inspection.
