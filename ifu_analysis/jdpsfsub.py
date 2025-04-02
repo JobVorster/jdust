@@ -3,8 +3,10 @@
 #PSF functions were inspired by scripts from @author: Łukasz Tychoniec tychoniec@strw.leidenuniv.nl
 
 from astropy.modeling import models, fitting
+from ifu_analysis.jdutils import is_nan_map
 import numpy as np
 import stpsf
+import matplotlib.pyplot as plt
 from photutils.centroids import centroid_2dg
 
 def Gauss2D_fit(data):
@@ -97,13 +99,17 @@ def generate_single_miri_mrs_psf(subband,spectral_channel,filename=None,
 		spectral_channel = 767
 	waves = [waves[spectral_channel]]
 
+	jitter_sigma = 0.007
+
+	miri.options['jitter'] = 'gaussian'   # jitter model name or None
+	miri.options['jitter_sigma'] = jitter_sigma # in arcsec per axis, default 0.007
+
 	if x_offset_arcsec:
 		miri.options['source_offset_x'] = x_offset_arcsec  # in units of arcseconds
 	if y_offset_arcsec:
 		miri.options['source_offset_y'] = y_offset_arcsec
 
 	PSFCube_Init = miri.calc_datacube(waves,fov_pixels=fov_pixels)
-
 
 
 	PSF_map = PSFCube_Init['DET_DIST'].data[0]
@@ -219,7 +225,6 @@ def subtract_psf_cube(data_cube,unc_cube,subband,SNR_percentile):
 			x_offset_arcsec, y_offset_arcsec = get_offsets(chan_map,unc_map,subband,channel,SNR_percentile)
 			psf_woffset, pix_scale = generate_single_miri_mrs_psf(subband,channel,
 				x_offset_arcsec = x_offset_arcsec,y_offset_arcsec = y_offset_arcsec,shp=np.shape(chan_map))
-
 			psf_woffset /= np.nanmax(psf_woffset)
 			w, model_data = Gauss2D_fit(chan_map)
 			scaling = w.amplitude
@@ -227,10 +232,23 @@ def subtract_psf_cube(data_cube,unc_cube,subband,SNR_percentile):
 			
 
 			psfsub_cube[channel] = chan_map - psf_map
+			if (0):	
+				plt.close()
+				plt.figure(figsize=(16,6))
+				plt.subplot(131)
+				plt.imshow(chan_map)
+				plt.colorbar(location='top',fraction=0.046)
+				plt.subplot(132)
+				plt.imshow(psf_map)
+				plt.colorbar(location='top',fraction=0.046)
+				plt.subplot(133)
+				plt.imshow(psfsub_cube[channel],cmap='coolwarm',vmin=-0.05*scaling,vmax=0.05*scaling)
+				plt.colorbar(location='top',fraction=0.046)
+				plt.show()
 
 			x_offset_arr.append(x_offset_arcsec)
 			y_offset_arr.append(y_offset_arcsec)
-			scaling_arr.append(scaling)
+			scaling_arr.append(scaling.value)
 
 	return psfsub_cube,x_offset_arr,y_offset_arr,scaling_arr
 
