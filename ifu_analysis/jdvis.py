@@ -108,6 +108,7 @@ def get_image_world_extent(img,wcs_2D):
 
 def get_image_pixel_extent(wcs_2D,world_bl,world_br,world_tl,world_tr):
 
+	print('HI, PLEASE MAKE A DOCSTRING FOR get_image_pixel_extent')
 	x_arr = []
 	y_arr = []
 
