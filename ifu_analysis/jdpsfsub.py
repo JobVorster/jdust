@@ -8,6 +8,7 @@ import numpy as np
 import stpsf
 import matplotlib.pyplot as plt
 from photutils.centroids import centroid_2dg
+from photutils.background import MedianBackground,Background2D
 
 def Gauss2D_fit(data):
 	'''
@@ -274,136 +275,142 @@ def get_pixel_scale(subband):
 	pix_scale = float(miri.pixelscale)
 	return pix_scale
 
-def stripe_correction(hdu,mask,filename):
+def stripe_correction(hdu,mask):
 	'''
-	FINISH IMPLEMENTATION!
+	Remove excess striping from IFU cubes due to cosmic ray showers. The JWST pipeline does remove showers, but not completely.
 
 	This function follows the method developed by TEMPLATES (J. Spilker, K.A. Phadke, D. Law)
 	https://github.com/JWST-Templates/Notebooks/blob/main/MIRI_MRS_reduction_SPT0418-47_PAH_ch3long.ipynb
 
 	Updates to iterate over channels provided by Lukas Welzel
+
+	Parameters
+	----------
+
+	hdu : astropy hdu
+		hdu of JWST s3d cube
+
+	mask : 2D array
+		Mask over the source, to exclude when estimating the background.
+
+	Return
+	------
+
+	cubeavg_wtd : 3D array
+		Cube averaged over some channels.
+
+	cubebkg_wtd : 3D array
+		Cube of the background estimate, weighted by the uncertainty from the hdu.
+
+	bkgsub_wtd : 3D array
+		Background subtracted science cube.
 	'''
-    sci  = hdu['SCI'].data
-    err  = hdu['ERR'].data
-    dq   = hdu['DQ'].data
-    scihead = hdu['SCI'].header
 
-    # These will be useful
-    wts  = err**-2   # w = 1/sigma^2, useful for weighted averages etc.
-    scimasked = np.ma.masked_array(sci, mask = (dq>0)) # use DQ array to mask the science data
+	sci  = hdu['SCI'].data
+	err  = hdu['ERR'].data
+	dq   = hdu['DQ'].data
+	scihead = hdu['SCI'].header
+
+	# These will be useful
+	wts  = err**-2   # w = 1/sigma^2, useful for weighted averages etc.
+	scimasked = np.ma.masked_array(sci, mask = (dq>0)) # use DQ array to mask the science data
 	# These define the pixel coordinates for the x and y center of the foreground lens,
-    # plus a radius based on the Einstein ring size. I (JS) get consistent results whether
-    # I get these using the cube's WCS information and ancillary ALMA data, or by collapsing
-    # the whole cube over wavelength and visibly seeing the lens+ring.
-    
-    # find global peak in cube, assume that we only need to be roughly correct, 
-    # and our source is the brightest part of the cube on average
-    # use median collapse to decrease impact of outliers
+	# plus a radius based on the Einstein ring size. I (JS) get consistent results whether
+	# I get these using the cube's WCS information and ancillary ALMA data, or by collapsing
+	# the whole cube over wavelength and visibly seeing the lens+ring.
 
-    # Filter out slices along the first axis where all elements are NaN
-    valid_slices = ~np.isnan(sci).all(axis=(1, 2))
+	# find global peak in cube, assume that we only need to be roughly correct, 
+	# and our source is the brightest part of the cube on average
+	# use median collapse to decrease impact of outliers
 
-    # Apply the filter to retain only valid slices
-    filtered_sci = sci[valid_slices]
+	# Filter out slices along the first axis where all elements are NaN
+	valid_slices = ~np.isnan(sci).all(axis=(1, 2))
 
-    # Check for columns where the pixel spectrum (across the first axis) is all NaN
-    all_nan_columns = np.isnan(sci).all(axis=0)
+	# Apply the filter to retain only valid slices
+	filtered_sci = sci[valid_slices]
 
-    # Set these columns to zero in the filtered data
-    filtered_sci[:, all_nan_columns] = 0
+	# Check for columns where the pixel spectrum (across the first axis) is all NaN
+	all_nan_columns = np.isnan(sci).all(axis=0)
 
-    # Compute the nanmedian across the first axis
-    med_combined = np.nanmedian(filtered_sci, axis=0)
+	# Set these columns to zero in the filtered data
+	filtered_sci[:, all_nan_columns] = 0
 
-    # Find the peak index
-    print ( med_combined.shape)
+	# Compute the nanmedian across the first axis
+	med_combined = np.nanmedian(filtered_sci, axis=0)
 
-    ind = np.unravel_index(np.argmax(med_combined, axis=None), med_combined.shape)
-    print(f"    {band} {channel}: peak at {ind}")
+	ind = np.unravel_index(np.argmax(med_combined, axis=None), med_combined.shape)
 
-    # Assign the peak coordinates and the rout value
-    xpeak, ypeak = ind
-    rout = 1
-    
-    print (sci[0].shape)
+	# Assign the peak coordinates and the rout value
+	xpeak, ypeak = ind
+	rout = 1
 
 	#Use the mask specified by the user.
-    sourcemask    = np.zeros(sci.shape, dtype=bool)
-    sourcemask[:] = mask
+	sourcemask    = np.zeros(sci.shape, dtype=bool)
+	sourcemask[:] = mask
 
-    # Create a copy of the original (DQ masked) data but now include our
-    # additional mask from above
-    scisourcemask = scimasked.copy()
-    scisourcemask.mask += sourcemask
+	# Create a copy of the original (DQ masked) data but now include our
+	# additional mask from above
+	scisourcemask = scimasked.copy()
+	scisourcemask.mask += sourcemask
 
-    # We will calculate the stripe template using a running average over the
-    # cube. There's an option to use either a straight average or a weighted average,
-    # so we'll just make both.
-    # These will be the smoothed cubes before stripe removal
-    cubeavg     = np.zeros(scisourcemask.shape)
-    cubeavg_wtd = np.zeros(scisourcemask.shape)
-    # These will contain the estimated stripe templates
-    cubebkg     = np.zeros(scisourcemask.shape)
-    cubebkg_wtd = np.zeros(scisourcemask.shape)
+	# We will calculate the stripe template using a running average over the
+	# cube. There's an option to use either a straight average or a weighted average,
+	# so we'll just make both.
+	# These will be the smoothed cubes before stripe removal
+	cubeavg     = np.zeros(scisourcemask.shape)
+	cubeavg_wtd = np.zeros(scisourcemask.shape)
+	# These will contain the estimated stripe templates
+	cubebkg     = np.zeros(scisourcemask.shape)
+	cubebkg_wtd = np.zeros(scisourcemask.shape)
 
-    # Setup for our background/stripe estimation. Stripes are coherent over tens
-    # of wavelength channels (remember cube has been "3d drizzled" so oversamples
-    # the detectors spectral resolution). After some experimentation I settled on
-    # a 25-channel running average.
+	# Setup for our background/stripe estimation. Stripes are coherent over tens
+	# of wavelength channels (remember cube has been "3d drizzled" so oversamples
+	# the detectors spectral resolution). After some experimentation I settled on
+	# a 25-channel running average.
 
-    chstep   = 25
-    halfstep = int((chstep-1)/2)
-    bkg_estimator = MedianBackground() # From photutils
- 	for chstart in np.arange(halfstep, sci.shape[0]):
-        cutout = np.ma.average(scimasked[chstart-halfstep:chstart+chstep+halfstep],axis=0)
-        cutout2= np.ma.average(scimasked[chstart-halfstep:chstart+chstep+halfstep],axis=0,weights=wts[chstart-halfstep:chstart+chstep+halfstep])
+	chstep   = 25
+	halfstep = int((chstep-1)/2)
+	bkg_estimator = MedianBackground() # From photutils
+	for chstart in np.arange(halfstep, sci.shape[0]):
+		cutout = np.ma.average(scimasked[chstart-halfstep:chstart+chstep+halfstep],axis=0)
+		cutout2= np.ma.average(scimasked[chstart-halfstep:chstart+chstep+halfstep],axis=0,weights=wts[chstart-halfstep:chstart+chstep+halfstep])
 
-        # Use photutils to estimate the 2D "background" (striping). The box_size
-        # parameter sets the shape of the stripe estimation. Here using (1,shape[1]/2)
-        # corresponds to fitting the "background" in a shape that is 1 row tall and
-        # half the x-pixels of the cube, which allows enough flexibility to account
-        # for the fact that the slices aren't perfectly x-aligned due to the slice
-        # curvature on the detector. Also exclude_percentile is very high here because
-        # in some rows most of the cube pixels are masked, where our circular source
-        # mask is at its widest point.
-        bkg = Background2D(cutout,  box_size=(1,int(np.ceil(cutout.shape[1]/2))), mask=(cutout.mask | sourcemask[0]), 
-                filter_size=1, bkg_estimator=bkg_estimator, exclude_percentile=75.0, sigma_clip=None)
-        bkg2= Background2D(cutout2, box_size=(1,int(np.ceil(cutout.shape[1]/2))), mask=(cutout2.mask | sourcemask[0]), 
-                filter_size=1, bkg_estimator=bkg_estimator, exclude_percentile=75.0, sigma_clip=None)
+		# Use photutils to estimate the 2D "background" (striping). The box_size
+		# parameter sets the shape of the stripe estimation. Here using (1,shape[1]/2)
+		# corresponds to fitting the "background" in a shape that is 1 row tall and
+		# half the x-pixels of the cube, which allows enough flexibility to account
+		# for the fact that the slices aren't perfectly x-aligned due to the slice
+		# curvature on the detector. Also exclude_percentile is very high here because
+		# in some rows most of the cube pixels are masked, where our circular source
+		# mask is at its widest point.
+		bkg = Background2D(cutout,  box_size=(1,int(np.ceil(cutout.shape[1]/2))), mask=(cutout.mask | sourcemask[0]), 
+			filter_size=1, bkg_estimator=bkg_estimator, exclude_percentile=75.0, sigma_clip=None)
+		bkg2= Background2D(cutout2, box_size=(1,int(np.ceil(cutout.shape[1]/2))), mask=(cutout2.mask | sourcemask[0]), 
+			filter_size=1, bkg_estimator=bkg_estimator, exclude_percentile=75.0, sigma_clip=None)
 
-        #print (np.mean(bkg.background_rms))
-        # Overwrite our blank cubes with data
-        cubeavg[chstart]     = cutout
-        cubeavg_wtd[chstart] = cutout2
-        cubebkg[chstart]     = bkg.background
-        cubebkg_wtd[chstart] = bkg2.background
+		#print (np.mean(bkg.background_rms))
+		# Overwrite our blank cubes with data
+		cubeavg[chstart]     = cutout
+		cubeavg_wtd[chstart] = cutout2
+		cubebkg[chstart]     = bkg.background
+		cubebkg_wtd[chstart] = bkg2.background
 
-        # The above fails near the edge channels at the start/end of the cube,
-        # pad those slices with the same background for convenience (and remember
-        # to ignore edge channels in later analysis)
-        cubeavg[0:halfstep]     = cubeavg[halfstep]
-        cubeavg_wtd[0:halfstep] = cubeavg_wtd[halfstep]
-        cubebkg[0:halfstep]     = cubebkg[halfstep]
-        cubebkg_wtd[0:halfstep] = cubebkg[halfstep]
-        cubeavg[-halfstep:]     = cubeavg[-halfstep]
-        cubeavg_wtd[-halfstep:] = cubeavg_wtd[-halfstep]
-        cubebkg[-halfstep:]     = cubebkg[-halfstep]
-        cubebkg_wtd[-halfstep:] = cubebkg[-halfstep]
+		# The above fails near the edge channels at the start/end of the cube,
+		# pad those slices with the same background for convenience (and remember
+		# to ignore edge channels in later analysis)
+		cubeavg[0:halfstep]     = cubeavg[halfstep]
+		cubeavg_wtd[0:halfstep] = cubeavg_wtd[halfstep]
+		cubebkg[0:halfstep]     = cubebkg[halfstep]
+		cubebkg_wtd[0:halfstep] = cubebkg[halfstep]
+		cubeavg[-halfstep:]     = cubeavg[-halfstep]
+		cubeavg_wtd[-halfstep:] = cubeavg_wtd[-halfstep]
+		cubebkg[-halfstep:]     = cubebkg[-halfstep]
+		cubebkg_wtd[-halfstep:] = cubebkg[-halfstep]
 
-    # Now write the wavelength-smoothed cubes and backgrounds to disk.
-    cubehdu = fits.PrimaryHDU(cubeavg,header=hdu['SCI'].header)
-    cubehdu.writeto(poststage3+'Level3_'+band+'-'+channel+'_s3d_runningavg.fits',overwrite=True)
-    cubehdu = fits.PrimaryHDU(cubeavg_wtd,header=hdu['SCI'].header)
-    cubehdu.writeto(poststage3+'Level3_'+band+'-'+channel+'_s3d_runningweightedavg.fits',overwrite=True)
-    bkghdu = fits.PrimaryHDU(cubebkg,header=hdu['SCI'].header)
-    bkghdu.writeto(poststage3+'Level3_'+band+'-'+channel+'_s3d_background.fits',overwrite=True)
-    bkghdu = fits.PrimaryHDU(cubebkg_wtd, header=hdu['SCI'].header)
-    bkghdu.writeto(poststage3+'Level3_'+band+'-'+channel+'_s3d_weightedbackground.fits',overwrite=True)
     
-    # Finally, also write out the background-subtracted cubes to disk
-    bkgsub     = scimasked.data - cubebkg
-    bkgsub_wtd = scimasked.data - cubebkg_wtd
-    cubehdu = fits.PrimaryHDU(bkgsub,header=hdu['SCI'].header)
-    cubehdu.writeto(poststage3+'Level3_'+band+'-'+channel+'_s3d_bkgsubtracted.fits',overwrite=True)
-    cubehdu = fits.PrimaryHDU(bkgsub_wtd,header=hdu['SCI'].header)
-    cubehdu.writeto(poststage3+'Level3_'+band+'-'+channel+'_s3d_bkgwtdsubtracted.fits',overwrite=True)
+
+	# Finally, also write out the background-subtracted cubes to disk
+	bkgsub     = scimasked.data - cubebkg
+	bkgsub_wtd = scimasked.data - cubebkg_wtd
+
+	return cubeavg_wtd, cubebkg_wtd, bkgsub_wtd
