@@ -1,4 +1,7 @@
-from jdust_utils import *
+from ifu_analysis.jdspextract import *
+
+
+import pandas as pd
 from astropy.wcs import WCS
 from glob import glob
 import os.path
@@ -105,6 +108,11 @@ for test_spectra in spectra_filenames:
 	plt.plot(um,flux,label='Raw')
 	plt.plot(um,filtered,label='Sav Gol Filter')
 	mbb = modified_black_body(um,result.params['scaling'].value,result.params['T'].value,result.params['beta'].value,solid_angle=solid_angle,lambda0 = lambda0).value
+
+
+	print(modified_black_body(1800,result.params['scaling'].value,result.params['T'].value,result.params['beta'].value,lambda0 = lambda0).value)
+
+
 	plt.plot(um,mbb,label='MBB')
 	plt.legend()
 	plt.subplot(212)
