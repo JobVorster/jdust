@@ -1,10 +1,15 @@
+from ifu_analysis.jdfitting import fit_linear_slope
+from ifu_analysis.jdutils import unpack_hdu
+
 import pandas as pd 
 import numpy as np
-from ifu_analysis.jdfitting import fit_linear_slope
+
 from spectres import spectres
 from tqdm import tqdm
 from scipy.signal import savgol_filter
 import matplotlib.pyplot as plt
+from tqdm import tqdm
+from pybaselines import Baseline
 
 def read_cont_mask_arr(filename,sep=','):
 	'''
@@ -97,22 +102,6 @@ def save_cont_cube(cont_cube,unc_cube,dq_cube,original_hdu,filename):
 		cont_hdu.writeto(filename)
 		print('Continuum cube written successfully.')
 
-def sav_gol_continuum(um,flux,polyorder=3,window_length = 100):
-	'''
-	IN DEVELOPMENT!!
-
-
-	Estimate the continuum following the method of Temmink, M, van Dishoeck et al. 2024. 
-	MINDS: The DR Tau disk I. Combining JWST-MIRI data with high-resolution CO spectra to characterise the hot gas
-
-	This function estimates the continuum for a 1D spectrum.
-	'''
-	print('IN DEVELOPMENT. THIS FUNCTION IS NOT FINISHED!')
-	filtered = savgol_filter(flux,window_length = window_length, polyorder = polyorder)
-	plt.plot(um,flux,alpha=0.3)
-	plt.plot(um,filtered)
-	plt.show()
-
 def resample_cube(um,cube,cube_unc,resampled_um):
 	'''
 	Resamples a cube to a new velocity resolutions.
@@ -154,10 +143,47 @@ def resample_cube(um,cube,cube_unc,resampled_um):
 			resampled_unc[:,idx,idy] = unc_res
 	return resampled_cube, resampled_unc
 
-def get_cont_cube(data_cube,um,cont_filename,sep=','):
+def automatic_continuum_estimate(fn,lam =1e4,scale=5,num_std=3,um_cut = 27.5):
+	'''
+	IN DEVELOPMENT.
+	'''
+
+	data_cube,unc_cube,dq_cube,hdr,um,shp = unpack_hdu(fn)
+
+	cont_cube = np.full(np.shape(data_cube),np.nan)
+	cont_unc = np.full(np.shape(data_cube),np.nan)
+
+	for idx in tqdm(range(shp[0])):
+		for idy in range(shp[1]):
+			flux = data_cube[:,idx,idy]
+			flux_unc = unc_cube[:,idx,idy]
+			inds = um < um_cut
+
+			um[~inds] = np.nan
+			flux[~inds] = np.nan
+			flux_unc[~inds] = np.nan
+
+			if len(um)!=0:
+				try:
+					baseline_fitter = Baseline(um, check_finite=True)
+					baseline, params = baseline_fitter.fabc(flux, lam=lam,scale=scale,num_std=num_std)
+					mask = params['mask']
+
+					flux[~mask] = np.nan
+					flux_unc[~mask] = np.nan
+
+					cont_cube[:,idx,idy] = flux
+					cont_unc[:,idx,idy] = flux_unc
+				except:
+					print('Nans detected in pixel (%d,%d), skipping...'%(idx,idy))
+	return cont_cube,cont_unc
+
+
+
+
+def get_cont_cube(data_cube,um,method=None,cont_filename=None,sep=','):
 	'''
 	Returns a copy of a cube, containing only the specified wavelength ranges. 
-
 
 	Parameters
 	----------
@@ -168,7 +194,7 @@ def get_cont_cube(data_cube,um,cont_filename,sep=','):
 	um: 1D array
 		Wavelengths of each channel in micron.
 
-	filename : string
+	cont_filename : string
 		Filename of the file containing the wavelengths to INCLUDE.
 		The file should have two columns 'line-lower' and 'line-upper'. 
 
@@ -183,16 +209,23 @@ def get_cont_cube(data_cube,um,cont_filename,sep=','):
 		Cube with only the data of the specified wavelength range. 
 
 	'''
+	if method == 'CHANNELS':
+		if not cont_filename:
+			raise ValueError('No filename specified for the wavelength ranges to use as continuum.')
+		mask_arr = read_cont_mask_arr(cont_filename,sep=',')
 
-	mask_arr = read_cont_mask_arr(cont_filename,sep=',')
+		cont_cube = np.zeros(np.shape(data_cube))
+		cont_cube[:,:,:] = np.nan
+		for um_shaded in mask_arr:
+			if (um_shaded[0] >= min(um)) and (um_shaded[1] < max(um)):
+				inds = np.where(np.logical_and(um >= um_shaded[0], um< um_shaded[1]))
+				cont_cube[inds] = data_cube[inds]
+			#else:
+			#    print('Range %s, outside of cube wavelength range'%(str(um_shaded)))
+		return cont_cube
+	elif method == 'AUTOMATIC':
+		raise ValueError('Method %s not yet developed.'%(method))
+	else:
+		raise ValueError('Please specify a valid method.')
 
-	cont_cube = np.zeros(np.shape(data_cube))
-	cont_cube[:,:,:] = np.nan
-	for um_shaded in mask_arr:
-		if (um_shaded[0] >= min(um)) and (um_shaded[1] < max(um)):
-			inds = np.where(np.logical_and(um >= um_shaded[0], um< um_shaded[1]))
-			cont_cube[inds] = data_cube[inds]
-		#else:
-		#    print('Range %s, outside of cube wavelength range'%(str(um_shaded)))
-	return cont_cube
 

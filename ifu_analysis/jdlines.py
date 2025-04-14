@@ -1,4 +1,4 @@
-from ifu_analysis.jdutils import get_JWST_IFU_um, interpolate_nan
+from ifu_analysis.jdutils import get_JWST_IFU_um, interpolate_nan, unpack_hdu
 
 
 from astropy.io import fits
@@ -80,15 +80,7 @@ def get_line_cube(fn,lambda0,N_chans):
 		Data quality around the line (untouched by the algorithm at this stage).
 	'''
 
-	#For now, we let the user specify the filename, one can add a function later that automatically identifies the relevant channel.
-	hdu = fits.open(fn)
-
-	#Unpack the hdu
-	hdr = hdu[1].header
-	data_cube, unc_cube, dq_cube = [hdu[i].data for i in [1,2,3]]
-	um = get_JWST_IFU_um(hdr)
-	shp = np.shape(data_cube[0,:,:]) #2D shape
-	
+	data_cube,unc_cube,dq_cube,hdr,um,shp = unpack_hdu(fn)
 
 	ind0 = np.digitize([lambda0],um)[0]
 	if (ind0 == 0) or (ind0 == len(um)):

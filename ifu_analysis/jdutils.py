@@ -11,6 +11,48 @@ from spectres import spectres #Resampling arxiv link: https://arxiv.org/abs/1705
 from astropy.io import fits
 from astropy.wcs import WCS
 
+def unpack_hdu(fn):
+	'''
+	Utility function to unpack often used variables from an IFU cube.
+
+	Parameters
+	----------
+
+	fn : string
+		Filename of the IFU cube.
+
+	Returns
+	-------
+
+	data_cube : 3D array
+		Science data.
+
+	unc_cube : 3D array
+		Uncertainties on the science data.
+
+	dq_cube : 3D array
+		Data quality of the science data.
+
+	hdr : astropy Header
+		Header of the science hdu.
+
+	um : 1D array
+		Wavelengths in microns. 
+
+	shp : tuple
+		Shape of the 2D map.
+
+	'''
+	hdu = fits.open(fn)
+
+	#Unpack the hdu
+	hdr = hdu[1].header
+	data_cube, unc_cube, dq_cube = [hdu[i].data for i in [1,2,3]]
+	um = get_JWST_IFU_um(hdr)
+	shp = np.shape(data_cube[0,:,:]) #2D shape
+
+	return data_cube,unc_cube,dq_cube,hdr,um,shp
+
 def get_JWST_IFU_um(header):
 	'''
 	Returns a wavelength array from an IFU cube ImageHDU header (typically index 1 for MIRI MRS cubes).
@@ -50,16 +92,16 @@ def interpolate_nan(array_like):
 	array : array
 		The same array with the nans interpolated.
 	'''
-    array = array_like.copy()
+	array = array_like.copy()
 
-    nans = np.isnan(array)
+	nans = np.isnan(array)
 
-    def get_x(a):
-        return a.nonzero()[0]
+	def get_x(a):
+		return a.nonzero()[0]
 
-    array[nans] = np.interp(get_x(nans), get_x(~nans), array[~nans])
+	array[nans] = np.interp(get_x(nans), get_x(~nans), array[~nans])
 
-    return array
+	return array
 
 def is_nan_map(array):
 	'''
