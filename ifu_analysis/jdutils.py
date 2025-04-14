@@ -34,6 +34,33 @@ def get_JWST_IFU_um(header):
 	um = crval + cdelt*(n_chan-(crpix-1))
 	return um
 
+def interpolate_nan(array_like):
+	'''
+	If an array containts nan values, fill the nan values with interpolations from surrounding entries.
+
+	Parameters
+	----------
+
+	array_like : array
+		An array containing nans.
+
+	Returns
+	-------
+	
+	array : array
+		The same array with the nans interpolated.
+	'''
+    array = array_like.copy()
+
+    nans = np.isnan(array)
+
+    def get_x(a):
+        return a.nonzero()[0]
+
+    array[nans] = np.interp(get_x(nans), get_x(~nans), array[~nans])
+
+    return array
+
 def is_nan_map(array):
 	'''
 	Checks whether an N-dimensional array consists of ONLY nans.

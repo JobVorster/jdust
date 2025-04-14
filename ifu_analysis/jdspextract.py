@@ -521,7 +521,10 @@ def stitch_subcubes(results, method='ADD'):
 			factor_unc = np.nanstd(vals)
 
 			new_results['flux'][indhigh] += factor
-			new_results['flux_unc'][indhigh] = np.sqrt(new_results['flux_unc'][indhigh]**2 + factor_unc**2)
+			#Old uncertainty calculation:
+			#new_results['flux_unc'][indhigh] = np.sqrt(new_results['flux_unc'][indhigh]**2 + factor_unc**2)
+			#BUT: One should not add uncertainties like that because the additive factor can artificially bloat uncertainties.
+			#For now the implementation leaves uncertainties untouched.
 		elif method == 'MEAN':
 			# Not implemented
 			vals = (flux_low + flux_high) / 2
