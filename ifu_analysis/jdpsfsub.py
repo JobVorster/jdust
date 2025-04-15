@@ -3,7 +3,7 @@
 #PSF functions were inspired by scripts from @author: Łukasz Tychoniec tychoniec@strw.leidenuniv.nl
 
 from astropy.modeling import models, fitting
-from ifu_analysis.jdutils import is_nan_map
+from ifu_analysis.jdutils import is_nan_map,get_JWST_PSF,define_circular_aperture
 import numpy as np
 import stpsf
 import matplotlib.pyplot as plt
@@ -135,7 +135,7 @@ def generate_single_miri_mrs_psf(subband,spectral_channel,filename=None,
 
 	return PSF_map, pix_scale
 
-def get_offsets(channel_map,unc_map,subband,spectral_channel,SNR_percentile=98.5):
+def get_offsets(channel_map,unc_map,subband,spectral_channel,mask_method,mask_par):
 	'''
 	Get the offsets between the peak of a channel map and a PSF map.
 
@@ -154,8 +154,22 @@ def get_offsets(channel_map,unc_map,subband,spectral_channel,SNR_percentile=98.5
 	spectral_channel : integer
 		Spectral channel on which to do the fit.
 
-	SNR_percentile : float
-		Signal-to-noise percentile to calculate the fitting mask.
+	mask_method : string
+		Method to use to mask channel maps before fitting the centroid.
+		Two method are currently supported:
+
+			SNR
+			---
+
+			This method takes a SNR percentage, and cuts all pixels below that percentage. It is easy to use, but can be unreliable if there is bright extended emission.
+
+			APERTURE
+			--------
+
+			This method places an aperture of 2*FWHM at the coordinates specified, and uses that as a mask.
+	
+	mask_par : float for mask_method=='SNR' and CircularAperture for mask_method=='APERTURE'.
+		Object used to mask the channel map before centroiding.
 
 	Returns
 	-------
@@ -167,9 +181,18 @@ def get_offsets(channel_map,unc_map,subband,spectral_channel,SNR_percentile=98.5
 		Offset between the peak in the channel map and the psf in arcsec.
 	'''
 	
-	SNR_arr = np.array(channel_map/unc_map).flatten()
-	SNR_threshold = np.nanpercentile(SNR_arr,[SNR_percentile])[0]
-	mask = channel_map/unc_map <SNR_threshold
+	if mask_method == 'SNR':
+		SNR_percentile = mask_par
+		SNR_arr = np.array(channel_map/unc_map).flatten()
+		SNR_threshold = np.nanpercentile(SNR_arr,[SNR_percentile])[0]
+		mask = channel_map/unc_map <SNR_threshold
+
+	elif mask_method == 'APERTURE':
+		aper = mask_par
+		mask = aper.to_mask()
+	else:
+		raise ValueError('Please specify a masking method for the centroiding. Centroid calculations on the whole map will be inaccurate.')
+
 	x_sci, y_sci = centroid_2dg(channel_map,unc_map,mask)
 	#psf_map, pix_scale = generate_single_miri_mrs_psf(subband,spectral_channel)
 	pix_scale = get_pixel_scale(subband)
@@ -178,7 +201,7 @@ def get_offsets(channel_map,unc_map,subband,spectral_channel,SNR_percentile=98.5
 
 	return x_offset_arcsec, y_offset_arcsec
 
-def subtract_psf_cube(data_cube,unc_cube,subband,SNR_percentile):
+def subtract_psf_cube(um,data_cube,unc_cube,subband,mask_par,mask_method,aper_coords = None,wcs = None):
 	'''
 	Point Spread Function subtraction for an entire MIRI MRS cube.
 
@@ -186,6 +209,9 @@ def subtract_psf_cube(data_cube,unc_cube,subband,SNR_percentile):
 
 	Parameters
 	----------
+	
+	um : 1D array
+		Wavelengths in micron.
 
 	data_cube : 3D array
 		Intensity cube in MJy sr-1
@@ -223,7 +249,20 @@ def subtract_psf_cube(data_cube,unc_cube,subband,SNR_percentile):
 	for channel, (chan_map, unc_map) in enumerate(zip(data_cube,unc_cube)):	
 		print('Channel %d of %d'%(channel,len(data_cube)))
 		if not is_nan_map(chan_map):
-			x_offset_arcsec, y_offset_arcsec = get_offsets(chan_map,unc_map,subband,channel,SNR_percentile)
+
+			if mask_method == 'APERTURE':
+				if aper_coords == None:
+					raise ValueError('Please specify an aperture coordinate for aperture masking.')
+				elif wcs == None:
+					raise ValueError('Please specify a wcs for aperture masking.')
+				else:
+					#Aperture size is defined by the law et al relation.
+					fwhm = get_JWST_PSF(um[channel])
+					RA, Dec = aper_coords
+					aper = define_circular_aperture(RA,Dec,fwhm)
+					mask_par = aper.to_pixel(wcs)
+
+			x_offset_arcsec, y_offset_arcsec = get_offsets(chan_map,unc_map,subband,channel,mask_par,mask_method)
 			psf_woffset, pix_scale = generate_single_miri_mrs_psf(subband,channel,
 				x_offset_arcsec = x_offset_arcsec,y_offset_arcsec = y_offset_arcsec,shp=np.shape(chan_map))
 			psf_woffset /= np.nanmax(psf_woffset)
