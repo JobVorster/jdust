@@ -10,6 +10,7 @@ from photutils.aperture import SkyCircularAperture
 from spectres import spectres #Resampling arxiv link: https://arxiv.org/abs/1705.05165
 from astropy.io import fits
 from astropy.wcs import WCS
+import astropy.units as u
 
 def unpack_hdu(fn):
 	'''

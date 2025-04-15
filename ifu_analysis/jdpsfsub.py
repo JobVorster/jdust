@@ -8,6 +8,7 @@ import numpy as np
 import stpsf
 import matplotlib.pyplot as plt
 from photutils.centroids import centroid_2dg
+import pandas as pd
 from photutils.background import MedianBackground,Background2D
 
 def Gauss2D_fit(data):
@@ -188,8 +189,14 @@ def get_offsets(channel_map,unc_map,subband,spectral_channel,mask_method,mask_pa
 		mask = channel_map/unc_map <SNR_threshold
 
 	elif mask_method == 'APERTURE':
+		shp = np.shape(channel_map)
 		aper = mask_par
-		mask = aper.to_mask()
+
+		#This line creates a 2D boolean mask from the aperture.
+		#Method='center' makes sure the mask is just 0s and 1s, with no float values in between.
+		#To_image lets the mask have the same shape as the relevant image.
+		#dtype=int turns the 2D array of floats to an integer array, which acts as a boolean array.
+		mask = np.array(aper.to_mask(method='center').to_image(shp),dtype=int)
 	else:
 		raise ValueError('Please specify a masking method for the centroiding. Centroid calculations on the whole map will be inaccurate.')
 
@@ -201,7 +208,7 @@ def get_offsets(channel_map,unc_map,subband,spectral_channel,mask_method,mask_pa
 
 	return x_offset_arcsec, y_offset_arcsec
 
-def subtract_psf_cube(um,data_cube,unc_cube,subband,mask_par,mask_method,aper_coords = None,wcs = None):
+def subtract_psf_cube(um,data_cube,unc_cube,subband,mask_method,mask_par,aper_coords = None,wcs = None,saveto=None):
 	'''
 	Point Spread Function subtraction for an entire MIRI MRS cube.
 
@@ -222,9 +229,33 @@ def subtract_psf_cube(um,data_cube,unc_cube,subband,mask_par,mask_method,aper_co
 	subband : string
 		MIRI MRS Subband, e.g. 3A, 4C.
 
-	SNR_percentile : float
-		Percentile of SNR map to consider for cutoff for the fit. 
-		This should be as close to 100 as possible to exclude extended emission, but should allow enough pixels for a good fit.
+	mask_method : string
+		Method to use to mask channel maps before fitting the centroid.
+		Two method are currently supported:
+
+			SNR
+			---
+
+			This method takes a SNR percentage, and cuts all pixels below that percentage. It is easy to use, but can be unreliable if there is bright extended emission.
+
+			APERTURE
+			--------
+
+			This method places an aperture of 2*FWHM at the coordinates specified, and uses that as a mask.
+	
+	mask_par : float for mask_method=='SNR' and CircularAperture for mask_method=='APERTURE'.
+		Object used to mask the channel map before centroiding. 
+
+		If aper_coords is specified, mask_par will be overwritten with a CircularAperture at the specified radius.
+
+	aper_coords : list of string
+		RA, Dec coordinates in format HHhMMmSS.Ss, DDdMMmSS.Ss for a circular aperture.
+
+	wcs : WCS Object
+		2D WCS of a channel map.
+
+	saveto : string
+		Filename to save the psf parameters.
 
 	Returns
 	-------
@@ -262,7 +293,7 @@ def subtract_psf_cube(um,data_cube,unc_cube,subband,mask_par,mask_method,aper_co
 					aper = define_circular_aperture(RA,Dec,fwhm)
 					mask_par = aper.to_pixel(wcs)
 
-			x_offset_arcsec, y_offset_arcsec = get_offsets(chan_map,unc_map,subband,channel,mask_par,mask_method)
+			x_offset_arcsec, y_offset_arcsec = get_offsets(chan_map,unc_map,subband,channel,mask_method,mask_par)
 			psf_woffset, pix_scale = generate_single_miri_mrs_psf(subband,channel,
 				x_offset_arcsec = x_offset_arcsec,y_offset_arcsec = y_offset_arcsec,shp=np.shape(chan_map))
 			psf_woffset /= np.nanmax(psf_woffset)
@@ -289,6 +320,13 @@ def subtract_psf_cube(um,data_cube,unc_cube,subband,mask_par,mask_method,aper_co
 			x_offset_arr.append(x_offset_arcsec)
 			y_offset_arr.append(y_offset_arcsec)
 			scaling_arr.append(scaling.value)
+
+	if saveto:
+		df = pd.DataFrame(columns =['x_offset','y_offset','scaling'])
+		df['x_offset'] = x_offset_arr
+		df['y_offset'] = y_offset_arr
+		df['scaling'] = scaling_arr
+		df.to_csv(saveto)
 
 	return psfsub_cube,x_offset_arr,y_offset_arr,scaling_arr
 
