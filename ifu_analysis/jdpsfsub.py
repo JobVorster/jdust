@@ -275,7 +275,7 @@ def get_pixel_scale(subband):
 	pix_scale = float(miri.pixelscale)
 	return pix_scale
 
-def stripe_correction(hdu,mask):
+def stripe_correction(hdu,mask,saveto=None):
 	'''
 	Remove excess striping from IFU cubes due to cosmic ray showers. The JWST pipeline does remove showers, but not completely.
 
@@ -412,5 +412,11 @@ def stripe_correction(hdu,mask):
 	# Finally, also write out the background-subtracted cubes to disk
 	bkgsub     = scimasked.data - cubebkg
 	bkgsub_wtd = scimasked.data - cubebkg_wtd
+
+	if saveto:
+		bkgsubhdu = hdu.copy()
+		bkgsubhdu[1].data = bkgsub_wtd
+		bkgsubhdu.writeto(saveto,overwrite=True)
+
 
 	return cubeavg_wtd, cubebkg_wtd, bkgsub_wtd

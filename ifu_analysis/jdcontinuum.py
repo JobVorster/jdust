@@ -10,6 +10,7 @@ from scipy.signal import savgol_filter
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from pybaselines import Baseline
+from astropy.io import fits
 
 def read_cont_mask_arr(filename,sep=','):
 	'''
@@ -143,7 +144,7 @@ def resample_cube(um,cube,cube_unc,resampled_um):
 			resampled_unc[:,idx,idy] = unc_res
 	return resampled_cube, resampled_unc
 
-def automatic_continuum_estimate(fn,lam =1e4,scale=5,num_std=3,um_cut = 27.5):
+def automatic_continuum_estimate(fn,lam =1e4,scale=3,num_std=3,um_cut = 27.5,saveto=None):
 	'''
 	IN DEVELOPMENT.
 	'''
@@ -157,11 +158,11 @@ def automatic_continuum_estimate(fn,lam =1e4,scale=5,num_std=3,um_cut = 27.5):
 		for idy in range(shp[1]):
 			flux = data_cube[:,idx,idy]
 			flux_unc = unc_cube[:,idx,idy]
-			inds = um < um_cut
+			#inds = um < um_cut
 
-			um[~inds] = np.nan
-			flux[~inds] = np.nan
-			flux_unc[~inds] = np.nan
+			#um[~inds] = np.nan
+			#flux[~inds] = np.nan
+			#flux_unc[~inds] = np.nan
 
 			if len(um)!=0:
 				try:
@@ -175,7 +176,14 @@ def automatic_continuum_estimate(fn,lam =1e4,scale=5,num_std=3,um_cut = 27.5):
 					cont_cube[:,idx,idy] = flux
 					cont_unc[:,idx,idy] = flux_unc
 				except:
-					print('Nans detected in pixel (%d,%d), skipping...'%(idx,idy))
+					continue
+					#print('Nans detected in pixel (%d,%d), skipping...'%(idx,idy))
+	if saveto:
+		conthdu = fits.open(fn)
+		conthdu[1].data = cont_cube
+		conthdu[2].data = unc_cube
+		conthdu.writeto(saveto,overwrite=True)
+
 	return cont_cube,cont_unc
 
 
