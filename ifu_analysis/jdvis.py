@@ -2,6 +2,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 from astropy.coordinates import SkyCoord
 from photutils.aperture import SkyCircularAperture
+from astropy.visualization.wcsaxes import WCSAxes
+from astropy.wcs import WCS
+
+################################
+# Constants					   #
+################################
+
+pc_to_au = 206265
+
 
 def plot_unstitched_spectra(results,umlim=None):
 	'''
@@ -173,7 +182,99 @@ def generate_image_grid(shp,figsize,wcs_arr=None):
 
 	axs = np.reshape(fig.axes,shp)
 	return fig, axs
-	
+
+def annotate_imshow(ax,hdr,
+	beam=None,RA_format = 'hh:mm:ss.sss',Dec_format = 'dd:mm:ss.s',
+	source_name=None,wavelength=None,img_type=None,fontdict={'va': 'center','ha': 'center','fontsize':12,'weight':'bold','color':'white'},
+	linear_scale = None, distance = None,
+	add_colorbar=False,colorbar_label=None):
+	'''
+	INSERT DOCSTRING HERE!!
+	'''
+
+	print('(annotate_imshow) Please test and add a docstring to this function!!')
+
+
+	if not isinstance(ax, WCSAxes):
+		raise ValueError('Axis is not of type WCSAxes, but some other axis type. Initialize axis with projection=wcs to use this function.')
+
+	xlim,ylim = ax.get_xlim(),ax.get_ylim()
+	xextent = np.diff(xlim)[0]
+	yextent = np.diff(ylim)[0]
+
+	ax.coords[0].set_major_formatter(RA_format)
+	ax.coords[1].set_major_formatter(Dec_format)
+
+	wcs = WCS(hdr)
+
+	#Make sure the wcs is 2D.
+	if wcs.world_n_dim == 3:
+		wcs.dropaxis(2)
+
+	#Beam must by of photutils skyaperture type.
+	if beam:
+		#This makes the beam at 5% of the extent in the bottom left corner.
+		extent_perc = 0.05
+		xorigin = xlim[0]+extent_perc*xextent
+		yorigin = ylim[0]+extent_perc*yextent
+
+		origin = [xorigin,yorigin]
+
+		pixel_beam = beam.to_pixel(wcs)
+		patch = pixel_beam.plot(ax,origin=origin,fill=False,ec='white')
+		ax.add_patch(patch)
+
+	if source_name or wavelength or img_type:
+		annotate_str = ''
+		if source_name:
+			annotate_str += source_name + '\n'
+		if wavelength:
+			annotate_str += wavelength + '\n'
+		if img_type : 
+			annotate_str += img_type + '\n'
+
+		#Add annotation to the figure.
+		extent_perc = 0.10
+		xorigin = xlim[0]+extent_perc*xextent
+		yorigin = ylim[1]-extent_perc*yextent
+		ax.text(xorigin,yorigin,annotate_str,**fontdict)
+
+
+	if linear_scale or distance:
+		if not (distance and linear_scale):
+			raise ValueError('Please specify the distance and linear scale to show linear scale bar.')
+		else:
+			#Calculate from header.
+			pixel_scale = hdr['CDELT1'] #deg per pixel.
+			distance *= pc_to_au
+			theta = np.rad2deg(linear_scale/distance)
+			npixels = theta/pixel_scale
+
+			lin_str = '%d au'%(linear_scale)
+
+			extent_perc = 0.10
+			xorigin = xlim[1]-extent_perc*xextent
+			yorigin = ylim[1]-extent_perc*yextent
+
+			xplot = [xorigin,xorigin+npixels]
+			yplot = [yorigin,yorigin]
+
+			ax.plot(xplot,yplot,color='white',linewidth=0.3)
+			xtext = np.mean(xplot)
+			ytext = yorigin
+			ax.text(xtext,ytext,lin_str,color='white',weight='bold',va='center',ha='center')
+
+	if add_colorbar:
+		im = ax.get_images()[-1]
+		cbar = plt.colorbar(im, ax=ax)
+		
+		if colorbar_label:
+			cbar.set_label(colorbar_label)
+
+	return ax
+
+
+
 def make_snr_figures(mom0,mom0_unc,wcs_2D,contour_levels=None,contour_cmap='Greys_r',contour_alpha=0.3):
 	'''
 	Make a three panel figure with a moment map, and its uncertainties. Mostly for data inspection.

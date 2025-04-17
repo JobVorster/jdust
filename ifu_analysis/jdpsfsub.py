@@ -196,7 +196,9 @@ def get_offsets(channel_map,unc_map,subband,spectral_channel,mask_method,mask_pa
 		#Method='center' makes sure the mask is just 0s and 1s, with no float values in between.
 		#To_image lets the mask have the same shape as the relevant image.
 		#dtype=int turns the 2D array of floats to an integer array, which acts as a boolean array.
-		mask = np.array(aper.to_mask(method='center').to_image(shp),dtype=int)
+		#The last np.mod(Array+1,2) is to invert the array (1-->0, 0-->1).
+		mask = np.mod(np.array(aper.to_mask(method='center').to_image(shp),dtype=int)+1,2)
+	
 	else:
 		raise ValueError('Please specify a masking method for the centroiding. Centroid calculations on the whole map will be inaccurate.')
 
@@ -288,7 +290,7 @@ def subtract_psf_cube(um,data_cube,unc_cube,subband,mask_method,mask_par,aper_co
 					raise ValueError('Please specify a wcs for aperture masking.')
 				else:
 					#Aperture size is defined by the law et al relation.
-					fwhm = get_JWST_PSF(um[channel])
+					fwhm = 1*get_JWST_PSF(um[channel])
 					RA, Dec = aper_coords
 					aper = define_circular_aperture(RA,Dec,fwhm)
 					mask_par = aper.to_pixel(wcs)
@@ -303,6 +305,7 @@ def subtract_psf_cube(um,data_cube,unc_cube,subband,mask_method,mask_par,aper_co
 			
 
 			psfsub_cube[channel] = chan_map - psf_map
+			#This plots the channel maps, the psf and the psfsubtracted for debugging.
 			if (0):	
 				plt.close()
 				plt.figure(figsize=(16,6))
@@ -313,7 +316,7 @@ def subtract_psf_cube(um,data_cube,unc_cube,subband,mask_method,mask_par,aper_co
 				plt.imshow(psf_map)
 				plt.colorbar(location='top',fraction=0.046)
 				plt.subplot(133)
-				plt.imshow(psfsub_cube[channel],cmap='coolwarm',vmin=-0.05*scaling,vmax=0.05*scaling)
+				plt.imshow(psfsub_cube[channel],cmap='coolwarm',vmin=-0.05*scaling)
 				plt.colorbar(location='top',fraction=0.046)
 				plt.show()
 

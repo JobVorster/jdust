@@ -256,6 +256,7 @@ def unstitched_spectrum_from_cube_list(filenames,RA_centre,Dec_centre,aper_size,
 			unc_arr /= 1e6
 		elif method == 'PIPELINE':
 			um, flux_arr, unc_arr = jpipe_extract_spectrum(cube_filename,Sky_aper)
+		
 		else:
 			raise ValueError('Please specify which method to use for spectral extraction.')
 
