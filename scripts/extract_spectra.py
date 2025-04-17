@@ -63,7 +63,7 @@ plt.savefig('./output-files/%s_continuum_SNR.jpg'%(source_name),dpi=300,bbox_inc
 
 if os.path.isfile(aperture_filename):
 	for aper_name,aper_size,(RA_centre,Dec_centre) in zip(aper_names,aper_sizes,coord_list):
-		results = unstitched_spectrum_from_cube_list(filenames,RA_centre,Dec_centre,aper_size,method='NAIVE')
+		results = unstitched_spectrum_from_cube_list(filenames,RA_centre,Dec_centre,aper_size)
 
 		if (0):
 			plt.close()

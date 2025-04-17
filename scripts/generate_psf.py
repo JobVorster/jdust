@@ -43,7 +43,7 @@ for filename,subband,SNR_percentile in zip(fn_arr,subband_arr,SNR_percentile_arr
 	psfsub_cube,x_offset_arr,y_offset_arr,scaling_arr = subtract_psf_cube(um,data_cube,unc_cube,subband,
 		mask_method,mask_par,aper_coords = aper_coords,wcs = wcs,saveto=saveto)
 
-	#I still need to check if this works as it should.
+	#I still need to check if the psfsub works as it should.
 	if doplot:
 		plt.figure(figsize = (16,5))
 		plt.subplot(131)
@@ -61,6 +61,7 @@ for filename,subband,SNR_percentile in zip(fn_arr,subband_arr,SNR_percentile_arr
 		plt.show()
 
 	if dosave:
+		hdu = fits.open(filename).copy()
 		hdu[1].data = psfsub_cube
-		hdu.writeto(output_foldername + fn + '_PSFsub.fits')
+		hdu.writeto(output_foldername + fn + '_PSFsub.fits',overwrite=True)
 	
