@@ -1,15 +1,17 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from astropy.coordinates import SkyCoord
-from photutils.aperture import SkyCircularAperture
-from astropy.visualization.wcsaxes import WCSAxes
+from photutils.aperture import SkyCircularAperture,CircularAperture
+from astropy.visualization.wcsaxes import WCSAxes,add_beam
 from astropy.wcs import WCS
+import astropy.units as u
 
 ################################
 # Constants					   #
 ################################
 
 pc_to_au = 206265
+deg_to_arcsec = 3600
 
 
 def plot_unstitched_spectra(results,umlim=None):
@@ -70,7 +72,7 @@ def plot_unstitched_spectra(results,umlim=None):
 	plt.legend()
 
 
-def get_image_world_extent(img,wcs_2D):
+def get_image_world_extent(img,wcs_2D,filter_nans=True):
 	'''
 	Retrieve the corners of an image in world coordinates.
 
@@ -99,15 +101,17 @@ def get_image_world_extent(img,wcs_2D):
 		Coordinates of the top right corner in world coordinates.
 
 	'''
+
 	shp = np.shape(img)
 	x_inds = np.arange(0,shp[0])
 	y_inds = np.arange(0,shp[1])
-
 	#The four corners are defined as follows:
 	bottom_left = [x_inds[0],y_inds[0]]
 	bottom_right = [x_inds[-1],y_inds[0]]
 	top_left = [x_inds[0],y_inds[-1]]
 	top_right = [x_inds[-1],y_inds[-1]]
+
+
 
 	world_bl = np.array(wcs_2D.wcs_pix2world(bottom_left[0],bottom_left[1] ,1))
 	world_br = np.array(wcs_2D.wcs_pix2world(bottom_right[0],bottom_right[1] ,1))
@@ -139,8 +143,9 @@ def get_image_pixel_extent(wcs_2D,world_bl,world_br,world_tl,world_tr):
 	x_arr.append(x_pix)
 	y_arr.append(y_pix)
 
+
 	xlim = [min(x_arr),max(x_arr)]
-	ylim = [min(y_arr),max(y_arr)]
+	ylim = [min(y_arr),0.88*max(y_arr)]
 	return xlim,ylim
 
 
@@ -183,9 +188,9 @@ def generate_image_grid(shp,figsize,wcs_arr=None):
 	axs = np.reshape(fig.axes,shp)
 	return fig, axs
 
-def annotate_imshow(ax,hdr,
-	beam=None,RA_format = 'hh:mm:ss.s',Dec_format = 'dd:mm:ss.s',
-	source_name=None,wavelength=None,img_type=None,fontdict={'va': 'center','ha': 'center','fontsize':12,'weight':'bold','color':'red'},
+def annotate_imshow(ax,hdr,hide_ticks=False,do_minor_ticks=False,
+	beam_fwhm=None,RA_format = 'hh:mm:ss.ss',Dec_format = 'dd:mm:ss.s',
+	source_name=None,wavelength=None,img_type=None,fontdict={'va': 'center','ha': 'left','fontsize':12,'color':'white'},
 	linear_scale = None, distance = None,
 	add_colorbar=False,colorbar_label=None,dogrid=False):
 	'''
@@ -200,8 +205,34 @@ def annotate_imshow(ax,hdr,
 	xlim,ylim = ax.get_xlim(),ax.get_ylim()
 	xextent = np.diff(xlim)[0]
 	yextent = np.diff(ylim)[0]
-	ax.coords[0].set_major_formatter(RA_format)
-	ax.coords[1].set_major_formatter(Dec_format)
+
+	ra,dec = ax.coords
+
+
+	ra.display_minor_ticks(do_minor_ticks)
+	dec.display_minor_ticks(do_minor_ticks)
+
+	ra.set_ticks(direction='in',color='white',size = 3,width=1,spacing = 1*u.arcsec)
+	dec.set_ticks(direction='in',color='white',size = 3,width=1,spacing=1*u.arcsec)
+
+	if hide_ticks:
+		ra.set_ticklabel_visible(False)
+		dec.set_ticklabel_visible(False)
+		ra.set_axislabel('')
+		dec.set_axislabel('')
+	else:
+		ra.set_major_formatter(RA_format)
+		dec.set_major_formatter(Dec_format)
+
+		ra.set_axislabel('Right Ascension (J2000)',fontsize = 13)
+		dec.set_axislabel('Declination (J2000)',fontsize = 13)
+
+		ra.set_ticklabel(size = 11,exclude_overlapping=False)
+		dec.set_ticklabel(size = 11,exclude_overlapping=False)
+
+
+
+		
 
 	wcs = WCS(hdr)
 
@@ -209,19 +240,11 @@ def annotate_imshow(ax,hdr,
 	if wcs.world_n_dim == 3:
 		wcs.dropaxis(2)
 
-	#Beam must by of photutils skyaperture type.
-	if beam:
-		#This makes the beam at 5% of the extent in the bottom left corner.
-		extent_perc = 0.05
-		xorigin = xlim[0]+extent_perc*xextent
-		yorigin = ylim[0]+extent_perc*yextent
+	#Beam fwhm must be in arcsec.
+	if beam_fwhm:
+		add_beam(ax,major=beam_fwhm*u.arcsec,minor=beam_fwhm*u.arcsec,angle=0,fc=None,ec='white',fill=None)
 
-		origin = [xorigin,yorigin]
-
-		pixel_beam = beam.to_pixel(wcs)
-		patch = pixel_beam.plot(ax,origin=origin,fill=False,ec='white')
-		ax.add_patch(patch)
-
+	#Annotation of title etc.
 	if source_name or wavelength or img_type:
 		annotate_str = ''
 		if source_name:
@@ -232,12 +255,12 @@ def annotate_imshow(ax,hdr,
 			annotate_str += img_type + '\n'
 
 		#Add annotation to the figure.
-		extent_perc = 0.20
-		xorigin = xlim[0]+extent_perc*xextent
+		extent_perc = 0.2
+		xorigin = xlim[0]+0.3*extent_perc*xextent
 		yorigin = ylim[1]-extent_perc*yextent
 		ax.text(xorigin,yorigin,annotate_str,**fontdict)
 
-
+	#Scalebar.
 	if linear_scale or distance:
 		if not (distance and linear_scale):
 			raise ValueError('Please specify the distance and linear scale to show linear scale bar.')
@@ -251,7 +274,7 @@ def annotate_imshow(ax,hdr,
 			lin_str = '%d au'%(linear_scale)
 
 			extent_perc = 0.10
-			xorigin = xlim[1]-extent_perc*xextent
+			xorigin = xlim[1]-2*extent_perc*xextent
 			yorigin = ylim[1]-extent_perc*yextent
 
 			xplot = [xorigin,xorigin+npixels]
@@ -260,17 +283,19 @@ def annotate_imshow(ax,hdr,
 			ax.plot(xplot,yplot-yextent*0.04,color='white',linewidth=2.5)
 			xtext = np.mean(xplot)
 			ytext = yorigin
-			ax.text(xtext,ytext,lin_str,color='white',weight='bold',va='center',ha='center')
+			ax.text(xtext,ytext,lin_str,color='white',va='center',ha='center',fontsize = 10)
 
 	if add_colorbar:
+		cbar_tick_fontsize = 10
 		im = ax.get_images()[-1]
-		cbar = plt.colorbar(im, ax=ax,location='top',fraction=0.05,pad = 0)
-		
+		cbar = plt.colorbar(im, ax=ax,location='top',fraction=0.046,pad = 0)
+		cbar.ax.tick_params(labelsize=cbar_tick_fontsize)
 		if colorbar_label:
-			cbar.set_label(colorbar_label)
+			cbar.set_label(colorbar_label,fontsize = 12)
+
 
 	if dogrid:
-		ax.coords.grid(color='white', alpha=0.5, linestyle='solid')
+		ax.coords.grid(color='white', alpha=0.15, linestyle='solid')
 
 	return ax
 
