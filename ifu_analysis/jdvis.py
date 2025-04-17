@@ -184,14 +184,13 @@ def generate_image_grid(shp,figsize,wcs_arr=None):
 	return fig, axs
 
 def annotate_imshow(ax,hdr,
-	beam=None,RA_format = 'hh:mm:ss.sss',Dec_format = 'dd:mm:ss.s',
-	source_name=None,wavelength=None,img_type=None,fontdict={'va': 'center','ha': 'center','fontsize':12,'weight':'bold','color':'white'},
+	beam=None,RA_format = 'hh:mm:ss.s',Dec_format = 'dd:mm:ss.s',
+	source_name=None,wavelength=None,img_type=None,fontdict={'va': 'center','ha': 'center','fontsize':12,'weight':'bold','color':'red'},
 	linear_scale = None, distance = None,
-	add_colorbar=False,colorbar_label=None):
+	add_colorbar=False,colorbar_label=None,dogrid=False):
 	'''
 	INSERT DOCSTRING HERE!!
 	'''
-
 	print('(annotate_imshow) Please test and add a docstring to this function!!')
 
 
@@ -201,7 +200,6 @@ def annotate_imshow(ax,hdr,
 	xlim,ylim = ax.get_xlim(),ax.get_ylim()
 	xextent = np.diff(xlim)[0]
 	yextent = np.diff(ylim)[0]
-
 	ax.coords[0].set_major_formatter(RA_format)
 	ax.coords[1].set_major_formatter(Dec_format)
 
@@ -234,7 +232,7 @@ def annotate_imshow(ax,hdr,
 			annotate_str += img_type + '\n'
 
 		#Add annotation to the figure.
-		extent_perc = 0.10
+		extent_perc = 0.20
 		xorigin = xlim[0]+extent_perc*xextent
 		yorigin = ylim[1]-extent_perc*yextent
 		ax.text(xorigin,yorigin,annotate_str,**fontdict)
@@ -259,20 +257,64 @@ def annotate_imshow(ax,hdr,
 			xplot = [xorigin,xorigin+npixels]
 			yplot = [yorigin,yorigin]
 
-			ax.plot(xplot,yplot,color='white',linewidth=0.3)
+			ax.plot(xplot,yplot-yextent*0.04,color='white',linewidth=2.5)
 			xtext = np.mean(xplot)
 			ytext = yorigin
 			ax.text(xtext,ytext,lin_str,color='white',weight='bold',va='center',ha='center')
 
 	if add_colorbar:
 		im = ax.get_images()[-1]
-		cbar = plt.colorbar(im, ax=ax)
+		cbar = plt.colorbar(im, ax=ax,location='top',fraction=0.05,pad = 0)
 		
 		if colorbar_label:
 			cbar.set_label(colorbar_label)
 
+	if dogrid:
+		ax.coords.grid(color='white', alpha=0.5, linestyle='solid')
+
 	return ax
 
+def align_axes(img_arr,ax_arr,wcs_arr,reference_ax = 0):
+	'''
+	Align a set of axes based on the image extent of a reference image. The function does not reproject,
+	it merely sets the xlim and ylim.
+
+	Parameters
+	----------
+
+	img_arr : 1D array of 2D array
+		Array of 2D images to plot.
+
+	ax_arr : 1D array of WCSAxes
+		Array of axes to align.
+
+	wcs_arr : 1D array of WCS
+		2D WCS object of each image.
+	
+	reference_ax : integer
+		Index of the image to use as the reference.
+
+	Returns
+	-------
+
+	ax_arr : 1D array of WCSAxes
+		Array of aligned axes.
+	'''
+	for ax in ax_arr:
+		if not isinstance(ax, WCSAxes):
+			raise ValueError('Axis is not of type WCSAxes, but some other axis type. Initialize axis with projection=wcs to use this function.')
+
+	len_arr = [len(x) for x in [img_arr,ax_arr,wcs_arr]]
+	if np.mean(len_arr) != len(img_arr):
+		raise ValueError('Error: img_arr, ax_arr and wcs_arr should all be the same length!')
+
+	corners = get_image_world_extent(img_arr[reference_ax],wcs_arr[reference_ax])
+
+	for i in range(len(img_arr)):
+		xlim,ylim = get_image_pixel_extent(wcs_arr[i],*corners)
+		ax_arr[i].set_xlim(xlim)
+		ax_arr[i].set_ylim(ylim)
+	return ax_arr
 
 
 def make_snr_figures(mom0,mom0_unc,wcs_2D,contour_levels=None,contour_cmap='Greys_r',contour_alpha=0.3):

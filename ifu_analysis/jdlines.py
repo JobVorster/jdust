@@ -32,7 +32,7 @@ def um_to_vlsr(um,lambda0):
 		Velocities in units of km s-1
 	'''
 	c_light = const.c 
-	vlsr = c_light*(1-lambda0/um)
+	vlsr = c_light*((um-lambda0)/lambda0)
 	return vlsr.to(u.km*u.s**-1).value
 
 
