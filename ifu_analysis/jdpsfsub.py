@@ -1,15 +1,21 @@
 #PSF Modelling and Subtraction
 
+
 #PSF functions were inspired by scripts from @author: Łukasz Tychoniec tychoniec@strw.leidenuniv.nl
+#
 
 from astropy.modeling import models, fitting
-from ifu_analysis.jdutils import is_nan_map,get_JWST_PSF,define_circular_aperture
+from ifu_analysis.jdutils import is_nan_map,get_JWST_PSF,define_circular_aperture,unpack_hdu
 import numpy as np
 import stpsf
+from astropy.io import fits
 import matplotlib.pyplot as plt
 from photutils.centroids import centroid_2dg
 import pandas as pd
+from matplotlib.colors import LogNorm
 from photutils.background import MedianBackground,Background2D
+from pybaselines import Baseline
+from scipy.interpolate import CubicSpline
 
 def Gauss2D_fit(data):
 	'''
@@ -210,8 +216,159 @@ def get_offsets(channel_map,unc_map,subband,spectral_channel,mask_method,mask_pa
 
 	return x_offset_arcsec, y_offset_arcsec
 
-def subtract_psf_cube(um,data_cube,unc_cube,subband,mask_method,mask_par,aper_coords = None,wcs = None,saveto=None):
+
+def get_cube_offsets_scaling(um,data_cube,unc_cube,subband,mask_method,base_factor,aper_coords,wcs,saveto_psf_gen):
+	x_offset_arr = []
+	y_offset_arr = []
+	scaling_arr = []
+
+	shp = np.shape(data_cube[0])
+	for channel, (chan_map,unc_map) in enumerate(zip(data_cube,unc_cube)):
+		print('Getting PSF Parameters: %d of %d'%(channel,len(data_cube)))
+		if not is_nan_map(chan_map):
+			if mask_method == 'APERTURE':
+				if aper_coords == None:
+					raise ValueError('Please specify an aperture coordinate for aperture masking.')
+				elif wcs == None:
+					raise ValueError('Please specify a wcs for aperture masking.')
+				else:
+					fwhm = base_factor*get_JWST_PSF(um[channel])
+					RA, Dec = aper_coords
+					aper = define_circular_aperture(RA,Dec,fwhm)
+					mask_par = aper.to_pixel(wcs)
+					aper_mask = np.mod(np.array(mask_par.to_mask(method='center').to_image(shp),dtype=int),2)
+			else:
+				print('No masking method other than APERTURE is supported.')
+			
+
+			x_offset_arcsec, y_offset_arcsec = get_offsets(chan_map,unc_map,subband,channel,mask_method,mask_par)
+			w, model_data = Gauss2D_fit(chan_map)
+			scaling = w.amplitude.value
+			x_offset_arr.append(x_offset_arcsec)
+			y_offset_arr.append(y_offset_arcsec)
+			scaling_arr.append(scaling)
+		else:
+			x_offset_arr.append(np.nan)
+			y_offset_arr.append(np.nan)
+			scaling_arr.append(np.nan)
+
+	x_offset_arr = np.array(x_offset_arr)
+	y_offset_arr = np.array(y_offset_arr)
+	scaling_arr = np.array(scaling_arr)
+
+
+	#Line flagging.
+	#Do continuum classification on scaling array.
+	um_inds = np.where(um < 27)
+	lam,scale,num_std = 1e4,5,3
+	baseline_fitter = Baseline(um[um_inds], check_finite=True)
+	scaling_baseline, scaling_params = baseline_fitter.fabc(scaling_arr[um_inds], lam=lam,scale=scale,num_std=num_std)
+	mask = scaling_params['mask']
+
+	mask_inds = np.where(mask == 1)
+	#Interpolation on the scaling, x-offset, y-offset.
+	baseline_fitter = Baseline(um[um_inds][mask_inds], check_finite=True)
+	scaling_baseline, scaling_params = baseline_fitter.fabc(scaling_arr[um_inds][mask_inds], lam = lam,scale=scale,num_std=num_std)
+	xoffset_baseline, xoffset_params = baseline_fitter.fabc(x_offset_arr[um_inds][mask_inds], lam = lam,scale=scale,num_std=num_std)
+	yoffset_baseline, yoffset_params = baseline_fitter.fabc(y_offset_arr[um_inds][mask_inds], lam = lam,scale=scale,num_std=num_std)
+
+	#Now the offset arrays become the baselines.
+	#We have to interpolate for the masked wavelengths.
+	cs_scaling = CubicSpline(um[um_inds][mask_inds],scaling_baseline,extrapolate=False)
+	cs_xoffset = CubicSpline(um[um_inds][mask_inds],xoffset_baseline,extrapolate=False)
+	cs_yoffset = CubicSpline(um[um_inds][mask_inds],yoffset_baseline,extrapolate=False)
+
+	if (1):
+		pix_scale = get_pixel_scale(subband)
+		plt.figure(figsize = (16,9))
+		plt.subplot(131)
+		plt.plot(um,scaling_arr,alpha=0.3,label='data')
+		plt.scatter(um[um_inds][mask],scaling_arr[um_inds][mask],label='lines masked')
+		plt.plot(um[um_inds][mask],scaling_baseline,color='red',label='baseline')
+		plt.plot(um,cs_scaling(um),color='green',label='interpolated baseline')
+		plt.legend()
+		plt.title('scaling')
+		plt.subplot(132)
+		plt.plot(um,x_offset_arr/pix_scale,alpha=0.3,label='data')
+		plt.scatter(um[um_inds][mask],x_offset_arr[um_inds][mask]/pix_scale,label='lines masked')
+		plt.plot(um[um_inds][mask],xoffset_baseline/pix_scale,color='red',label='baseline')
+		plt.plot(um,cs_xoffset(um)/pix_scale,color='green',label='interpolated baseline')
+		plt.title('x-offset')
+		plt.legend()
+		plt.subplot(133)
+		plt.plot(um,y_offset_arr/pix_scale,alpha=0.3,label='data')
+		plt.scatter(um[um_inds][mask],y_offset_arr[um_inds][mask]/pix_scale,label='lines masked')
+		plt.plot(um[um_inds][mask],yoffset_baseline/pix_scale,color='red',label='baseline')
+		plt.plot(um,cs_yoffset(um)/pix_scale,color='green',label='interpolated baseline')
+		plt.title('y-offset')
+		plt.legend()
+		plt.savefig('./psf_parameters_%s.png'%(subband),bbox_inches='tight',dpi=150)
+		plt.close()
+
+
+	scaling_arr = cs_scaling(um)
+	x_offset_arr = cs_xoffset(um)
+	y_offset_arr = cs_yoffset(um)
+
+
+	if saveto_psf_gen:
+		df = pd.DataFrame(columns =['um','x_offset','y_offset','scaling'])
+		df['um'] = um
+		df['x_offset'] = x_offset_arr
+		df['y_offset'] = y_offset_arr
+		df['scaling'] = scaling_arr
+		df.to_csv(saveto_psf_gen)
+
+
+	return x_offset_arr,y_offset_arr,scaling_arr
+
+
+
+def generate_psf_cube(fn,subband,mask_method,mask_par,aper_coords = None,wcs = None,flagged_channels = None,saveto_psf_gen=None,saveto_psf_cube=None,base_factor=1):
+	#Unpack and set up variables.
+	data_cube,unc_cube,dq_cube,hdr,um,shp = unpack_hdu(fn)
+	psf_cube = np.zeros(np.shape(data_cube))
+	
+
+	fwhm_residual = []
+	fwhm_bfe_residual = []
+	bfe_residual = []
+	
+	x_offset_arr,y_offset_arr,scaling_arr = get_cube_offsets_scaling(um,data_cube,unc_cube,subband,mask_method,base_factor,aper_coords,wcs,saveto_psf_gen)
+
+	#Over each channel
+	for channel, (chan_map, unc_map) in enumerate(zip(data_cube,unc_cube)):	
+		print('Generating PSF cube: %d of %d'%(channel,len(data_cube)))
+
+		x_offset_arcsec,y_offset_arcsec,scaling = x_offset_arr[channel],y_offset_arr[channel],scaling_arr[channel]
+		
+		psf_woffset, pix_scale = generate_single_miri_mrs_psf(subband,channel,
+			x_offset_arcsec = x_offset_arcsec,y_offset_arcsec = y_offset_arcsec,shp=np.shape(chan_map))
+		psf_woffset /= np.nanmax(psf_woffset)
+		
+		psf_map = psf_woffset*scaling
+		psf_cube[channel] = psf_map
+
+	if saveto_psf_cube:
+		hdu = fits.open(fn)
+		hdu[1].data = psf_cube
+		hdu.writeto(saveto_psf_cube,overwrite=True)
+
+	return psf_cube,x_offset_arr,y_offset_arr,scaling_arr
+
+def get_aper_mask(um,aper_coords,base_factor,wcs,shp):
+	#Aperture size is defined by the law et al relation.
+	fwhm = base_factor*get_JWST_PSF(um)
+	RA, Dec = aper_coords
+	aper = define_circular_aperture(RA,Dec,fwhm)
+	mask_par = aper.to_pixel(wcs)
+	aper_mask = np.mod(np.array(mask_par.to_mask(method='center').to_image(shp),dtype=int),2)
+	return aper_mask
+
+
+def subtract_psf_cube(fn,subband,mask_method,mask_par,psf_filename = None,aper_coords = None,wcs = None,saveto=None,mask_psfsub=False,bfe_factor=0,flagged_channels = None,saveto_psf_gen=None,saveto_psf_cube=None):
 	'''
+	UPDATE DOCUMENTATION!
 	Point Spread Function subtraction for an entire MIRI MRS cube.
 
 	The results is very sensitive to the SNR_percentile across different subbands.
@@ -274,62 +431,80 @@ def subtract_psf_cube(um,data_cube,unc_cube,subband,mask_method,mask_par,aper_co
 	scaling_arr : 1D array
 		Scaling factors of the PSF used for the subtraction.
 	'''
-
+	data_cube,unc_cube,dq_cube,hdr,um,shp = unpack_hdu(fn)
 	psfsub_cube = np.zeros(np.shape(data_cube))
 	x_offset_arr = []
 	y_offset_arr = []
 	scaling_arr = []
+
+	fwhm_residual = []
+	fwhm_bfe_residual = []
+	bfe_residual = []
+	shp = np.shape(psfsub_cube[0])
+
+	base_factor = 1
+
+
+	psf_cube,x_offset_arr,y_offset_arr,scaling_arr = generate_psf_cube(fn,subband,mask_method,mask_par,aper_coords,wcs,flagged_channels,saveto_psf_gen,saveto_psf_cube,base_factor)
+
 	for channel, (chan_map, unc_map) in enumerate(zip(data_cube,unc_cube)):	
 		print('Channel %d of %d'%(channel,len(data_cube)))
-		if not is_nan_map(chan_map):
+		psf_map = psf_cube[channel]
+		psfsub_cube[channel] = chan_map - psf_map
 
-			if mask_method == 'APERTURE':
-				if aper_coords == None:
-					raise ValueError('Please specify an aperture coordinate for aperture masking.')
-				elif wcs == None:
-					raise ValueError('Please specify a wcs for aperture masking.')
-				else:
-					#Aperture size is defined by the law et al relation.
-					fwhm = 1*get_JWST_PSF(um[channel])
-					RA, Dec = aper_coords
-					aper = define_circular_aperture(RA,Dec,fwhm)
-					mask_par = aper.to_pixel(wcs)
+		residual = np.abs(psfsub_cube[channel]/psf_map) #residual is subtracted relative to scaled psf
+		fwhm = (base_factor+bfe_factor)*get_JWST_PSF(um[channel])
+		RA, Dec = aper_coords
+		aper = define_circular_aperture(RA,Dec,fwhm)
+		mask_par = aper.to_pixel(wcs)
 
-			x_offset_arcsec, y_offset_arcsec = get_offsets(chan_map,unc_map,subband,channel,mask_method,mask_par)
-			psf_woffset, pix_scale = generate_single_miri_mrs_psf(subband,channel,
-				x_offset_arcsec = x_offset_arcsec,y_offset_arcsec = y_offset_arcsec,shp=np.shape(chan_map))
-			psf_woffset /= np.nanmax(psf_woffset)
-			w, model_data = Gauss2D_fit(chan_map)
-			scaling = w.amplitude
-			psf_map = psf_woffset*scaling
-			
+		aper_mask = get_aper_mask(um[channel],aper_coords,base_factor,wcs,shp)
 
-			psfsub_cube[channel] = chan_map - psf_map
-			#This plots the channel maps, the psf and the psfsubtracted for debugging.
-			if (0):	
-				plt.close()
-				plt.figure(figsize=(16,6))
-				plt.subplot(131)
-				plt.imshow(chan_map)
-				plt.colorbar(location='top',fraction=0.046)
-				plt.subplot(132)
-				plt.imshow(psf_map)
-				plt.colorbar(location='top',fraction=0.046)
-				plt.subplot(133)
-				plt.imshow(psfsub_cube[channel],cmap='coolwarm',vmin=-0.05*scaling)
-				plt.colorbar(location='top',fraction=0.046)
-				plt.show()
+		aper_mask_bfe = np.mod(np.array(mask_par.to_mask(method='center').to_image(shp),dtype=int),2)
 
-			x_offset_arr.append(x_offset_arcsec)
-			y_offset_arr.append(y_offset_arcsec)
-			scaling_arr.append(scaling.value)
+		bfe_mask = aper_mask_bfe - aper_mask
+
+		fwhm_residual.append(np.nansum(residual[aper_mask==1]))
+		fwhm_bfe_residual.append(np.nansum(residual[aper_mask_bfe==1]))
+		bfe_residual.append(np.nansum(residual[bfe_mask==1]))
+
+		if mask_psfsub:
+			psfsub_cube[channel][aper_mask_bfe==1] = np.nan
+
+		#This plots the channel maps, the psf and the psfsubtracted for debugging.
+		if (0):	
+			vmin = -0.05*scaling
+			vmax = np.nanmax(psfsub_cube[channel])
+			plt.close()
+			plt.figure(figsize=(16,6))
+			plt.subplot(131)
+			plt.imshow(chan_map,vmin=vmin,vmax=vmax,cmap='gist_stern',origin='lower')
+			plt.title('%s Channel Map'%(subband))
+			plt.colorbar(location='bottom',fraction=0.046)
+			plt.subplot(132)
+			plt.imshow(psf_map,vmin=vmin,vmax=vmax,cmap='gist_stern',origin='lower')
+			plt.title('%s PSF Model'%(subband))
+			plt.colorbar(location='bottom',fraction=0.046)
+			plt.subplot(133)
+			plt.title('%s PSF Subtracted'%(subband))
+			plt.imshow(psfsub_cube[channel],vmin=vmin,vmax=vmax,cmap='gist_stern',origin='lower')
+			plt.colorbar(location='bottom',fraction=0.046)
+			plt.show()
 
 	if saveto:
-		df = pd.DataFrame(columns =['x_offset','y_offset','scaling'])
-		df['x_offset'] = x_offset_arr
-		df['y_offset'] = y_offset_arr
-		df['scaling'] = scaling_arr
-		df.to_csv(saveto)
+		#This should be the psf_subtracted cube.
+		hdu = fits.open(fn).copy()
+		hdu[1].data = psfsub_cube
+		hdu.writeto(saveto,overwrite=True)
+
+		if (0):
+			plt.figure(figsize = (9,4))
+			plt.plot(um,fwhm_residual,label='%.2f fwhm'%(base_factor))
+			plt.plot(um,fwhm_bfe_residual,label='%.2f fwhm'%(base_factor+bfe_factor))
+			plt.plot(um,bfe_residual,label='bfe only')
+			plt.legend()
+			plt.show()
+			
 
 	return psfsub_cube,x_offset_arr,y_offset_arr,scaling_arr
 
@@ -426,8 +601,15 @@ def stripe_correction(hdu,mask,saveto=None):
 
 	#Use the mask specified by the user.
 	sourcemask    = np.zeros(sci.shape, dtype=bool)
-	sourcemask[:] = mask
-
+	if len(np.shape(mask)) == 2:
+		sourcemask[:] = mask
+		print('Used 2D mask for the 3D spectral cube.')
+	elif mask.shape == sci.shape:
+		sourcemask = mask
+		print('Used 3D mask for the 3D spectral cube.')
+	else:
+		raise ValueError(f"Mask must be either 2D (y, x) or 3D (z, y, x). Got shape {mask.shape}.")
+	
 	# Create a copy of the original (DQ masked) data but now include our
 	# additional mask from above
 	scisourcemask = scimasked.copy()
@@ -452,7 +634,7 @@ def stripe_correction(hdu,mask,saveto=None):
 	halfstep = int((chstep-1)/2)
 	bkg_estimator = MedianBackground() # From photutils
 	for chstart in np.arange(halfstep, sci.shape[0]):
-		cutout = np.ma.average(scimasked[chstart-halfstep:chstart+chstep+halfstep],axis=0)
+		cutout = np.ma.median(scimasked[chstart-halfstep:chstart+chstep+halfstep],axis=0)
 		cutout2= np.ma.average(scimasked[chstart-halfstep:chstart+chstep+halfstep],axis=0,weights=wts[chstart-halfstep:chstart+chstep+halfstep])
 
 		# Use photutils to estimate the 2D "background" (striping). The box_size
@@ -487,7 +669,7 @@ def stripe_correction(hdu,mask,saveto=None):
 		cubebkg[-halfstep:]     = cubebkg[-halfstep]
 		cubebkg_wtd[-halfstep:] = cubebkg[-halfstep]
 
-    
+	
 
 	# Finally, also write out the background-subtracted cubes to disk
 	bkgsub     = scimasked.data - cubebkg
@@ -495,8 +677,12 @@ def stripe_correction(hdu,mask,saveto=None):
 
 	if saveto:
 		bkgsubhdu = hdu.copy()
-		bkgsubhdu[1].data = bkgsub_wtd
-		bkgsubhdu.writeto(saveto,overwrite=True)
+		bkgsubhdu[1].data = bkgsub
+		bkgsubhdu.writeto(saveto[0],overwrite=True)
+
+		cubebkghdu = hdu.copy()
+		cubebkghdu[1].data = cubebkg
+		cubebkghdu.writeto(saveto[1],overwrite=True)
 
 
-	return cubeavg_wtd, cubebkg_wtd, bkgsub_wtd
+	return cubeavg, cubebkg, bkgsub

@@ -144,47 +144,85 @@ def resample_cube(um,cube,cube_unc,resampled_um):
 			resampled_unc[:,idx,idy] = unc_res
 	return resampled_cube, resampled_unc
 
-def automatic_continuum_estimate(fn,lam =1e4,scale=3,num_std=3,um_cut = 27.5,saveto=None):
-	'''
-	IN DEVELOPMENT.
-	'''
+#Continuum estimation.
+def automatic_continuum_cube(fn,num_std = 5 ,lam = 1e4,scale=5,saveto='',saveto_plots='',verbose=False,um_cut=27.5):
+	data_cube,unc_cube,dq_cube,hdr,um,shp = unpack_hdu(hdu_fn)
 
-	data_cube,unc_cube,dq_cube,hdr,um,shp = unpack_hdu(fn)
 
-	cont_cube = np.full(np.shape(data_cube),np.nan)
-	cont_unc = np.full(np.shape(data_cube),np.nan)
+	cube_shp = np.shape(data_cube)
+
+	subcube = get_subcube_name(fn)
+
+	cont_cube = np.full(cube_shp,np.nan)
+	unc_cont_cube = np.full(cube_shp,np.nan)
+	dq_cont_cube = np.full(cube_shp,np.nan)
 
 	for idx in tqdm(range(shp[0])):
 		for idy in range(shp[1]):
-			flux = data_cube[:,idx,idy]
-			flux_unc = unc_cube[:,idx,idy]
-			#inds = um < um_cut
-
-			#um[~inds] = np.nan
-			#flux[~inds] = np.nan
-			#flux_unc[~inds] = np.nan
-
+			um = get_JWST_IFU_um(hdr)
+			um_inds = np.where(np.logical_and(um < um_cut,np.isfinite(data_cube[:,idx,idy])))[0]
+			flux = data_cube[um_inds,idx,idy].copy()
+			flux_unc = unc_cube[um_inds,idx,idy].copy()
+			dq = dq_cont_cube[um_inds,idx,idy].copy()
 			if len(um)!=0:
 				try:
-					baseline_fitter = Baseline(um, check_finite=True)
+					baseline_fitter = Baseline(um[um_inds], check_finite=True)
 					baseline, params = baseline_fitter.fabc(flux, lam=lam,scale=scale,num_std=num_std)
 					mask = params['mask']
+					dum = abs(um[0]-um[1])
 
 					flux[~mask] = np.nan
 					flux_unc[~mask] = np.nan
+					dq[~mask] = np.nan
 
-					cont_cube[:,idx,idy] = flux
-					cont_unc[:,idx,idy] = flux_unc
+					cont_cube[um_inds,idx,idy] = flux
+					unc_cont_cube[um_inds,idx,idy] = flux_unc
+					dq_cont_cube[um_inds,idx,idy] = dq
+
+					if (0):
+						if (idx==30) & (idy == 30):
+							#if (saveto_plots != 0) & (idx %2 == 0) & (idy %2 == 0):
+							plt.figure(figsize = (9,4))
+							plt.plot(um,data_cube[:,idx,idy],color='grey',alpha=0.2,label='data')
+							plt.plot(um,flux,color='red',label='continuum')
+							plt.plot(um,baseline,color='green',linestyle='dotted',label='baseline')
+							plt.xlabel('Wavelength (um)')
+							plt.ylabel('Flux Density (MJy sr-1)')
+							plt.title('Pixel (x,y) = (%d,%d)'%(idy,idx))
+							plt.legend()
+							plt.show()
+							#plt.savefig(saveto_plots + '%scontinuumx%dy%d.png'%(subcube,idx,idy),bbox_inches='tight',dpi=75)
+							#plt.close()
+
+
 				except:
-					continue
-					#print('Nans detected in pixel (%d,%d), skipping...'%(idx,idy))
-	if saveto:
-		conthdu = fits.open(fn)
-		conthdu[1].data = cont_cube
-		conthdu[2].data = unc_cube
-		conthdu.writeto(saveto,overwrite=True)
+					if verbose:
+						print('Continuum estimation did not work for pixel (idx,idy) = (%d,%d)'%(idx,idy))
+					cont_cube[um_inds,idx,idy] = flux
+					unc_cont_cube[um_inds,idx,idy] = flux_unc
+					dq_cont_cube[um_inds,idx,idy] = dq
+					if (0):
+						if (saveto_plots != 0) & (idx %2 == 0) & (idy %2 == 0):
+							plt.figure(figsize = (9,4))
+							plt.plot(um,data_cube[um_inds,idx,idy],color='grey',alpha=0.2,label='data')
+							plt.title('No masking for this pixel')
+							plt.xlabel('Wavelength (um)')
+							plt.ylabel('Flux Density (MJy sr-1)')
+							plt.title('Pixel (x,y) = (%d,%d)'%(idy,idx))
+							plt.legend()
+							plt.savefig(saveto_plots + '%scontinuumx%dy%d.png'%(subcube,idy,idx),bbox_inches='tight',dpi=75)
+							plt.close()
 
-	return cont_cube,cont_unc
+
+
+	if saveto:
+		hdu = fits.open(fn)
+		hdu['SCI'].data = cont_cube
+		hdu['ERR'].data = unc_cont_cube
+		hdu['DQ'].data = dq_cont_cube
+		hdu.writeto(saveto,overwrite=True)
+		print('Continuum cube saved!')
+	return cont_cube,unc_cont_cube,dq_cont_cube
 
 
 

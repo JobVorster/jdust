@@ -1,11 +1,13 @@
 from jwst.datamodels import MirMrsApcorrModel,IFUCubeModel
 from astropy.io import fits
 from astropy.wcs import WCS
+from ifu_analysis.jdutils import *
 import numpy as np
 import asdf
 from jwst.extract_1d.ifu import ifu_extract1d
 from photutils.aperture import aperture_photometry
 import json
+import matplotlib.pyplot as plt
 
 
 
@@ -71,7 +73,7 @@ def jpipe_extract_spectrum(filename,aperture,bkg_sigma_clip=10):
 	}
 
 	#Change this to a random temp file.
-	fname_reffile = './temp/temp_%s_ref.asdf'%(prefix)
+	fname_reffile = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/temp/temp_%s_ref.asdf'%(prefix)
 	# Create the ASDF file object from our data tree
 	af = asdf.AsdfFile(tree,lazy_load=False)
 	af.validate()
@@ -82,7 +84,7 @@ def jpipe_extract_spectrum(filename,aperture,bkg_sigma_clip=10):
 	#Aperture correction file.
 	apcorr = MirMrsApcorrModel(input_model,validate_on_assignment=True)
 	apcorr.schema_url = 'http://stsci.edu/schemas/jwst_datamodel/mirmrs_apcorr.schema'
-	fname_apcorr = './temp/temp_%s_apcorr.asdf'%(prefix)
+	fname_apcorr = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/temp/temp_%s_apcorr.asdf'%(prefix)
 	apcorr.to_asdf(fname_apcorr)
 
 	#Pixel coordinates.
@@ -93,7 +95,7 @@ def jpipe_extract_spectrum(filename,aperture,bkg_sigma_clip=10):
 	source_type='POINT'
 	bkg_sigma_clip = bkg_sigma_clip
 	apcorr_ref_file= None#fname_apcorr
-	subtract_background=False
+	subtract_background=subtract_background
 	ifu_rfcorr=True
 	ifu_autocen=False
 	spectra=ifu_extract1d(input_model=input_model, 
@@ -109,9 +111,50 @@ def jpipe_extract_spectrum(filename,aperture,bkg_sigma_clip=10):
 				  ifu_covar_scale=1.0)
 
 	spec_table = spectra.spec[0].spec_table
+
 	um = spec_table['wavelength']
 	flux_arr = spec_table['flux']  
 	unc_arr = spec_table['flux_error']  # or whatever column name is used for flux
+
+	#print(spec_table.columns)
+	#ColDefs(
+	#name = 'WAVELENGTH'; format = 'D'; unit = 'um'
+	#name = 'FLUX'; format = 'D'; unit = 'Jy'
+	#name = 'FLUX_ERROR'; format = 'D'; unit = 'Jy'
+	#name = 'FLUX_VAR_POISSON'; format = 'D'; unit = 'Jy^2'
+	#name = 'FLUX_VAR_RNOISE'; format = 'D'; unit = 'Jy^2'
+	#name = 'FLUX_VAR_FLAT'; format = 'D'; unit = 'Jy^2'
+	#name = 'SURF_BRIGHT'; format = 'D'; unit = 'MJy/sr'
+	#name = 'SB_ERROR'; format = 'D'; unit = 'MJy/sr'
+	#name = 'SB_VAR_POISSON'; format = 'D'; unit = '(MJy/sr)^2'
+	#name = 'SB_VAR_RNOISE'; format = 'D'; unit = '(MJy/sr)^2'
+	#name = 'SB_VAR_FLAT'; format = 'D'; unit = '(MJy/sr)^2'
+	#name = 'DQ'; format = 'J'; bzero = 2147483648
+	#name = 'BACKGROUND'; format = 'D'; unit = 'MJy/sr'
+	#name = 'BKGD_ERROR'; format = 'D'; unit = 'MJy/sr'
+	#name = 'BKGD_VAR_POISSON'; format = 'D'; unit = '(MJy/sr)^2'
+	#name = 'BKGD_VAR_RNOISE'; format = 'D'; unit = '(MJy/sr)^2'
+	#name = 'BKGD_VAR_FLAT'; format = 'D'; unit = '(MJy/sr)^2'
+	#name = 'NPIXELS'; format = 'D'
+	if (0):
+		plt.figure(figsize = (16,16))
+		#plt.subplot(221)
+		plt.plot(um,spec_table['SURF_BRIGHT']  ,label='SURF_BRIGHT')
+		plt.plot(um,5*spec_table['SB_ERROR'],label='SB_ERROR')
+		plt.legend()
+		#plt.subplot(222)
+		#plt.plot(um,spec_table['BACKGROUND'],label='background')
+		#plt.legend()
+		#plt.subplot(223)
+		#plt.plot(um,spec_table['NPIXELS'],label='Npixles')
+		#plt.legend()
+		#plt.subplot(224)
+		#plt.plot(um,spec_table['SB_ERROR'],label='SB_ERROR')
+		#plt.legend()
+		plt.show()
+
+
+	
 
 	return np.array(um),np.array(flux_arr),np.array(unc_arr)
 
@@ -435,7 +478,7 @@ def find_neighbouring_subcubes(results):
 			pairs['um_pairs'].append('%.6f:%.6f'%(um_range[lower][1],um_range[upper][0]))
 	return pairs
 
-def stitch_subcubes(results, method='ADD'):
+def stitch_subcubes(results, method='ADD',baseband = 'ch3-short'):
 	'''
 	Stitch together overlapping spectra from neighboring subcubes.
 	
@@ -480,6 +523,12 @@ def stitch_subcubes(results, method='ADD'):
 	- The uncertainty on the scaling factor is estimated from the standard deviation of ratio values
 	- The function processes subcubes sequentially from lower to higher wavelengths
 	'''
+	
+	if baseband:
+		base_inds  = np.where(np.array(results['subcube_name']) == baseband)[0][0]		
+		um_base, flux_base, unc_base = [results[x][base_inds].copy() for x in ['um', 'flux', 'flux_unc']]
+
+
 	# Find neighboring subcubes
 	pairs = find_neighbouring_subcubes(results)
 	
@@ -488,6 +537,15 @@ def stitch_subcubes(results, method='ADD'):
 	
 	# Process each pair of neighboring subcubes
 	new_results = results.copy()
+
+	#for debugging
+	do_stitch_plot = False
+	if do_stitch_plot:
+		plt.close()
+		inds = np.where(np.array(results['subcube_name']) == 'ch3-short')[0][0]		
+		um_plot, flux_plot, unc_plot = [results[x][inds] for x in ['um', 'flux', 'flux_unc']]
+		plt.plot(um_plot,flux_plot,label='baseband')
+
 	for name_pair, um_pair in zip(pairs['name_pairs'], pairs['um_pairs']):
 		# Extract neighboring subchannels
 		chlow, chhigh = name_pair.split(':')
@@ -508,6 +566,8 @@ def stitch_subcubes(results, method='ADD'):
 		# Resample the chlow spectra to the spectral resolution of chhigh
 		flux_low, unc_low = spectres(um_high, um_low, flux_low, spec_errs=unc_low, fill=None, verbose=True)
 		
+
+
 		# Apply the selected stitching method
 		if method == 'MULTIPLY':
 			vals = flux_low/flux_high
@@ -516,7 +576,6 @@ def stitch_subcubes(results, method='ADD'):
 			new_results['flux'][indhigh] *= factor
 			new_results['flux_unc'][indhigh] *= factor
 		elif method == 'ADD':
-			# Not implemented
 			vals = flux_low - flux_high
 			factor = np.nanmedian(vals)
 			factor_unc = np.nanstd(vals)
@@ -531,11 +590,33 @@ def stitch_subcubes(results, method='ADD'):
 			vals = (flux_low + flux_high) / 2
 			raise ValueError('Method not yet implemented.')
 		
-		#print('%s:%s, factor =%.2E+-%.2E' % (chlow, chhigh, factor, factor_unc))
+	if do_stitch_plot:
+		plot_res = merge_subcubes(new_results)
+		plt.plot(plot_res['um'],plot_res['flux'],label ='post-stitch')
+		plt.title('%s'%(str(name_pair)))
+		plt.xscale('log')
+		plt.yscale('log')
+		plt.xlabel('Wavelength (um)')
+		plt.ylabel('Flux Density (Jy)')
+		plt.legend()
+		plt.show()
+
 	
+	if baseband:
+		plot_res = merge_subcubes(new_results)
+		um_plot, flux_plot, unc_plot = [plot_res[x] for x in ['um', 'flux', 'flux_unc']]
+
+		um_inds,comm1,comm2 = np.intersect1d(um_base,um_plot,return_indices=True)
+		offset = np.nanmedian(flux_base[comm1]-flux_plot[comm2])
+
+		for j in range(len(new_results['flux'])):
+			new_results['flux'][j] += offset
+
+
+		#print('%s:%s, factor =%.2E+-%.2E' % (chlow, chhigh, factor, factor_unc))
 	return new_results
 
-def merge_subcubes(results):
+def merge_subcubes(results,do_zero_pointing=False):
 	'''
 	Merge all subcubes in the results dictionary into single arrays.
 	
@@ -623,7 +704,11 @@ def merge_subcubes(results):
 	merged_results['flux'] = all_flux
 	merged_results['flux_unc'] = all_flux_unc
 	merged_results['subcube_indices'] = subcube_indices
-	
+
+	if do_zero_pointing:
+		if min(all_flux) < 0:
+			merged_results['flux'] = all_flux + abs(min(all_flux))
+
 	return merged_results
 
 def read_spectra(filename):

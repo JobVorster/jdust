@@ -57,7 +57,10 @@ def unpack_hdu(fn):
 def get_JWST_IFU_um(header):
 	'''
 	Returns a wavelength array from an IFU cube ImageHDU header (typically index 1 for MIRI MRS cubes).
-
+	Based on the formula from the pipeline documentation:
+	"wave = (np.arange(hdr['NAXIS3']) + hdr['CRPIX3'] - 1) * hdr['CDELT3'] + hdr['CRVAL3']"
+	URL: https://jwst-docs.stsci.edu/jwst-calibration-status/miri-calibration-status/miri-mrs-calibration-status#gsc.tab=0
+	
 	Parameters
 	----------
 
@@ -74,7 +77,7 @@ def get_JWST_IFU_um(header):
 	crpix = header['CRPIX3']
 	crval = header['CRVAL3']
 	cdelt = header['CDELT3']
-	um = crval + cdelt*(n_chan-(crpix-1))
+	um = (n_chan + crpix - 1) * cdelt + crval
 	return um
 
 def interpolate_nan(array_like):
