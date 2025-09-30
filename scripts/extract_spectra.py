@@ -1,71 +1,77 @@
-from jdust_utils import *
+from ifu_analysis.jdspextract import *
+from ifu_analysis.jdutils import *
+from ifu_analysis.jdcontinuum import get_cont_cube
 from astropy.wcs import WCS
 from glob import glob
 import os.path
 from scipy.ndimage import median_filter
 from matplotlib.colors import LogNorm
+import matplotlib.pyplot as plt
 
 
-
-
+do_flooring = False #Whether to set low flux measurements to the 3 sigma level.
+do_zero_pointing = False
+spectral_extraction_method = 'PIPELINE' #or NAIVE or PIPELINE
 #sources: BHR71, HH211, L1448MM1, SerpensSMM1
 source_name = 'L1448MM1'
 
-foldername = '/home/vorsteja/Documents/JOYS/JWST_cubes/%s/'%(source_name)
-#foldername = '/home/vorsteja/Documents/JOYS/JWST_cubes/L1448MM1_PSFSub/'
-cont_filename = '/home/vorsteja/Documents/JOYS/JDust/jwst-ifu-analysis/input-files/cont-mask-%s.txt'%(source_name)
-aperture_filename = '/home/vorsteja/Documents/JOYS/JDust/jwst-ifu-analysis/input-files/aperture-ini-%s.txt'%(source_name)
+#foldername = '/home/vorsteja/Documents/JOYS/JWST_cubes/%s/'%(source_name)
+foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/PSF_Subtraction/'
+cont_filename = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/input-files/cont-mask-%s.txt'%(source_name)
+aperture_filename = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/input-files/aperture-ini-%s.txt'%(source_name)
+output_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/debug_spectra/'
 
 
 filenames = glob(foldername + '*.fits')
-#filenames.sort()
+filenames.sort()
 subcubes = []
 for filename in filenames:
 	subcubes.append(get_subcube_name(filename))
 subcubes = np.array(subcubes)
-ind = np.where(subcubes =='ch4-short')[0][0]
-hdu = fits.open(filenames[ind])
-wcs = WCS(hdu[1].header)
-wcs = wcs.dropaxis(2)
-data_cube = hdu[1].data
-unc_cube = hdu[2].data
+#ind = np.where(subcubes =='ch4-short')[0][0]
+#hdu = fits.open(filenames[ind])
+#wcs = WCS(hdu[1].header)
+#wcs = wcs.dropaxis(2)
+#data_cube = hdu[1].data
+#unc_cube = hdu[2].data
 
 
-um = get_JWST_IFU_um(hdu[1].header)
-print(f"Data cube wavelength range: {min(um)} to {max(um)}")
-cont_cube = get_cont_cube(data_cube,um,cont_filename,sep=',')
-unc_cube = get_cont_cube(unc_cube,um,cont_filename,sep=',')
+#um = get_JWST_IFU_um(hdu[1].header)
+#print(f"Data cube wavelength range: {min(um)} to {max(um)}")
+#cont_cube = get_cont_cube(data_cube,um,cont_filename,sep=',')
+#unc_cube = get_cont_cube(unc_cube,um,cont_filename,sep=',')
 
-mom0,mom0_unc = make_moment_map(cont_cube,unc_cube,0,len(um))
+#mom0,mom0_unc = make_moment_map(cont_cube,unc_cube,0,len(um))
 
 
-cont_min, cont_max = 50,1000
-contour_levels = [i for i in np.logspace(np.log10(cont_min),np.log10(cont_max),10)]
-fig, ax1, ax2, ax3 = make_snr_figures(mom0,mom0_unc,wcs,contour_levels=contour_levels,contour_cmap='Reds')
+#cont_min, cont_max = 50,1000
+#contour_levels = [i for i in np.logspace(np.log10(cont_min),np.log10(cont_max),10)]
+#fig, ax1, ax2, ax3 = make_snr_figures(mom0,mom0_unc,wcs,contour_levels=contour_levels,contour_cmap='Reds')
 
 ####################################################
-fig.suptitle(source_name)
+#fig.suptitle(source_name)
 # Set RA and Dec format with higher precision
-ax1.coords[0].set_major_formatter('hh:mm:ss.sss')  # RA with milliarcsec precision
-ax1.coords[1].set_major_formatter('dd:mm:ss.ss')   # Dec with centiarcsec precision
-ax2.coords[0].set_major_formatter('hh:mm:ss.sss')
-ax2.coords[1].set_major_formatter('dd:mm:ss.ss')
-ax3.coords[0].set_major_formatter('hh:mm:ss.sss')
-ax3.coords[1].set_major_formatter('dd:mm:ss.ss')
+#ax1.coords[0].set_major_formatter('hh:mm:ss.sss')  # RA with milliarcsec precision
+#ax1.coords[1].set_major_formatter('dd:mm:ss.ss')   # Dec with centiarcsec precision
+#ax2.coords[0].set_major_formatter('hh:mm:ss.sss')
+#ax2.coords[1].set_major_formatter('dd:mm:ss.ss')
+#ax3.coords[0].set_major_formatter('hh:mm:ss.sss')
+#ax3.coords[1].set_major_formatter('dd:mm:ss.ss')
 ####################################################
 
 
 if os.path.isfile(aperture_filename):
 	aper_names,aper_sizes,coord_list = read_aperture_ini(aperture_filename)
-	plot_apertures(aper_names,aper_sizes,coord_list,ax1,wcs,color='White')
+	#plot_apertures(aper_names,aper_sizes,coord_list,ax1,wcs,color='White')
 
-plt.savefig('./output-files/%s_continuum_SNR.jpg'%(source_name),dpi=300,bbox_inches='tight')
+#plt.savefig('./output-files/%s_continuum_SNR.jpg'%(source_name),dpi=300,bbox_inches='tight')
 
 if os.path.isfile(aperture_filename):
 	for aper_name,aper_size,(RA_centre,Dec_centre) in zip(aper_names,aper_sizes,coord_list):
-		results = unstitched_spectrum_from_cube_list(filenames,RA_centre,Dec_centre,aper_size)
+		print('kk')
+		results = unstitched_spectrum_from_cube_list(filenames,RA_centre,Dec_centre,aper_size,method = spectral_extraction_method)
 
-		if (0):
+		if (1):
 			plt.close()
 			plt.figure(figsize = (16,4))
 			for j in range(len(results['subcube_name'])):
@@ -74,17 +80,19 @@ if os.path.isfile(aperture_filename):
 			plt.xlabel('Wavelength (um)')
 			plt.suptitle('Source: %s, Aperture: %s'%(source_name,aper_name))
 			plt.ylabel('Flux Density (Jy)')
+			#plt.xscale('log')
+			plt.yscale('log')
 			plt.minorticks_on()
 			plt.grid(which ='both',alpha=0.3)
-			plt.savefig('output-files/%s_aper%s_spectrum_unstitched.jpg'%(source_name,aper_name),dpi=300,bbox_inches='tight')
+			plt.savefig(output_foldername + '/%s_aper%s_spectrum_unstitched.jpg'%(source_name,aper_name),dpi=300,bbox_inches='tight')
 
 		results_stitched = stitch_subcubes(results)
-		results_merged = merge_subcubes(results_stitched)
-		save_spectra(results,'./output-files/%s_aper%s_unstitched.spectra'%(source_name,aper_name))
+		results_merged = merge_subcubes(results_stitched,do_zero_pointing = do_zero_pointing)
+		save_spectra(results,output_foldername + '/%s_aper%s_unstitched.spectra'%(source_name,aper_name))
 
 
 		#The merged spectra gives a problem with saving.
-		#save_spectra(results_stitched,'./output-files/%s_aper%s.spectra'%(source_name,aper_name))
+		save_spectra(results_stitched,output_foldername +'/%s_aper%s.spectra'%(source_name,aper_name))
 
 		
 		if (1):
@@ -96,11 +104,13 @@ if os.path.isfile(aperture_filename):
 			plt.xlabel('Wavelength (um)')
 			plt.suptitle('Source: %s, Aperture: %s'%(source_name,aper_name))
 			plt.ylabel('Flux Density (Jy)')
+			#plt.xscale('log')
+			plt.yscale('log')
 			plt.minorticks_on()
 			plt.grid(which ='both',alpha=0.3)
-			plt.savefig('output-files/%s_aper%s_spectrum.jpg'%(source_name,aper_name),dpi=300,bbox_inches='tight')
+			plt.savefig(output_foldername + '/%s_aper%s_spectrum.jpg'%(source_name,aper_name),dpi=300,bbox_inches='tight')
 
-exit()
+		#exit()
 
 #Tasks todo:
 

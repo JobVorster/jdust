@@ -10,9 +10,15 @@ import numpy as np
 #generate_image_grid(shp,figsize,wcs_arr=None)
 #align_axes(img_arr,ax_arr,wcs_arr,reference_ax = 0)
 
-
+source_name = 'L1448MM1'
 output_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/publication_figures/'
-filenames = glob('/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448-mm_*_PSFsub_stripe_continuum.fits')
+plot_fits = 'PSF+STRIPE'
+if plot_fits == 'PSF+STRIPE':
+	filenames = glob('/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448-mm_*_PSFsub_stripe_continuum.fits')
+	output_figure_name = output_foldername + '%s_ch3_ch4_PSFSUB_STRIPE.jpg'%(source_name)
+if plot_fits == 'CHANNELS':
+	filenames = glob('/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448-mm_*_CHANNELS_continuum.fits')
+	output_figure_name = output_foldername + '%s_ch3_ch4_CHANNELS.jpg'%(source_name)
 filenames.sort()
 shp = (2,3)
 figsize = (14,8)
@@ -46,15 +52,16 @@ for i,fn in enumerate(filenames):
 	#if i == 2:
 	#	break
 
-print([len(x) for x in [wcs_arr,hdr_arr,img_arr,subcube_arr]])
+
 
 fig, ax_arr = generate_image_grid(shp,figsize,wcs_arr)
 ax_arr = ax_arr.flat
+print([len(i) for i in [wcs_arr,hdr_arr,img_arr,subcube_arr,um_arr,ax_arr]])
 ax_arr = align_axes(img_arr,ax_arr,wcs_arr,reference_ax = 0)
 
 
 colorbar_label = r'Flux Density (MJy sr$^{-1}$ $\mu$m)'
-source_name = 'L1448MM1'
+
 img_type = 'Continuum'
 imshow_cmap = 'gist_stern'
 for i in range(len(img_arr)):
@@ -72,7 +79,7 @@ for i in range(len(img_arr)):
 	
 	ax = annotate_imshow(ax,hdr,hide_ticks=hide_ticks,source_name=source_name,wavelength=r'%.1f $\mu$m'%(mean_um),img_type=img_type,
 		beam_fwhm = fwhm,linear_scale = linear_scale, distance = distance,
-		add_colorbar=True,colorbar_label=colorbar_label,dogrid=True)
+		add_colorbar=False,colorbar_label=colorbar_label,dogrid=True)
 fig.subplots_adjust(wspace=-0.3,hspace=0.2)
-fig.savefig(output_foldername + '%s_ch3_ch4.jpg'%(source_name),dpi=300,bbox_inches='tight')
+fig.savefig(output_figure_name,dpi=300,bbox_inches='tight')
 
