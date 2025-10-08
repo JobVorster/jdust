@@ -20,8 +20,8 @@ if plot_fits == 'CHANNELS':
 	filenames = glob('/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448-mm_*_CHANNELS_continuum.fits')
 	output_figure_name = output_foldername + '%s_ch3_ch4_CHANNELS.jpg'%(source_name)
 filenames.sort()
-shp = (2,3)
-figsize = (14,8)
+shp = (4,3)
+figsize = (14,16)
 
 distance = 240
 linear_scale = 300
@@ -33,11 +33,10 @@ subcube_arr = []
 um_arr = []
 for i,fn in enumerate(filenames):
 	
-	hdu = fits.open(fn)
-	hdr = hdu[0].header
-	wcs = WCS(hdr)
+	#hdu = fits.open(fn)
+	
 	subchannel = get_subcube_name(fn)
-	hdu_cube = fits.open('/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/PSF_Subtraction/L1448-mm_%s_s3d_LSRcorr_PSFsub.fits'%(subchannel))
+	hdu = fits.open('/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/PSF_Subtraction/L1448-mm_%s_s3d_LSRcorr_PSFsub.fits'%(subchannel))
 	cube_hdr = hdu_cube[1].header
 	um = get_JWST_IFU_um(cube_hdr)
 	mean_um = np.mean(um)

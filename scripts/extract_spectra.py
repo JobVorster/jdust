@@ -16,10 +16,10 @@ spectral_extraction_method = 'PIPELINE' #or NAIVE or PIPELINE
 source_name = 'L1448MM1'
 
 #foldername = '/home/vorsteja/Documents/JOYS/JWST_cubes/%s/'%(source_name)
-foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/PSF_Subtraction/'
-cont_filename = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/input-files/cont-mask-%s.txt'%(source_name)
+foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_post_processing/PSF_Subtraction/'
+#cont_filename = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/input-files/cont-mask-%s.txt'%(source_name)
 aperture_filename = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/input-files/aperture-ini-%s.txt'%(source_name)
-output_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/debug_spectra/'
+output_foldername = foldername + 'spectra/'
 
 
 filenames = glob(foldername + '*.fits')
@@ -68,7 +68,7 @@ if os.path.isfile(aperture_filename):
 
 if os.path.isfile(aperture_filename):
 	for aper_name,aper_size,(RA_centre,Dec_centre) in zip(aper_names,aper_sizes,coord_list):
-		print('kk')
+		print('Doing aperture %s of %s'%(aper_name,source_name))
 		results = unstitched_spectrum_from_cube_list(filenames,RA_centre,Dec_centre,aper_size,method = spectral_extraction_method)
 
 		if (1):
@@ -110,7 +110,7 @@ if os.path.isfile(aperture_filename):
 			plt.grid(which ='both',alpha=0.3)
 			plt.savefig(output_foldername + '/%s_aper%s_spectrum.jpg'%(source_name,aper_name),dpi=300,bbox_inches='tight')
 
-		#exit()
+exit()
 
 #Tasks todo:
 

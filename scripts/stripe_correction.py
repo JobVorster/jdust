@@ -34,7 +34,6 @@ for subchannel in subchannel_arr:
 	
 
 	cont_cube,unc_cont_cube,dq_cont_cube = automatic_continuum_cube(hdu_fn,saveto = output_cont,saveto_plots =saveto_plots)
-
 	n_sigma = 5
 	cont_cube[cont_cube > n_sigma*unc_cont_cube] = np.nan
 	cont_map = np.nansum(cont_cube,axis = 0)
