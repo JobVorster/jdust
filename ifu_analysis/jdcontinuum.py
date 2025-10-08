@@ -11,6 +11,16 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from pybaselines import Baseline
 from astropy.io import fits
+from astropy.wcs import WCS
+from astropy import units as u
+from astropy.coordinates import SkyCoord
+
+from ifu_analysis.jdutils import get_subcube_name,get_JWST_IFU_um
+
+def multiply_along_axis(A, B, axis):
+    return np.swapaxes(np.swapaxes(A, axis, -1) * B, -1, axis)
+
+
 
 def read_cont_mask_arr(filename,sep=','):
 	'''
@@ -144,9 +154,51 @@ def resample_cube(um,cube,cube_unc,resampled_um):
 			resampled_unc[:,idx,idy] = unc_res
 	return resampled_cube, resampled_unc
 
+def radec_to_pixels(ra, dec, wcs):
+    """
+    Convert RA/Dec coordinates to pixel coordinates.
+    
+    Parameters:
+    -----------
+    ra : str or array-like of str
+        Right Ascension in sexagesimal format (e.g., "12:34:56.7")
+    dec : str or array-like of str
+        Declination in sexagesimal format (e.g., "+12:34:56.7")
+    wcs : astropy.wcs.WCS object
+        World Coordinate System transformation
+    
+    Returns:
+    --------
+    x, y : float or array
+        Pixel coordinates (0-indexed)
+    """
+
+    coords = SkyCoord(ra=ra, dec=dec, unit=(u.hourangle, u.deg), frame='icrs')
+    x, y = wcs.world_to_pixel(coords)
+    
+    return int(x), int(y)
+
+def continuum_masking_figure(um,flux,flux_masked,baseline,subcube,plot_coords,saveto):
+	plt.close()
+	plt.figure(figsize = (2*3.46,2*2))
+	print('plotting')
+	plt.plot(um,flux,label='observation',color='grey',alpha=0.3)
+	plt.plot(um,flux_masked,label='lines masked',color='red')
+	plt.plot(um,baseline,label='baseline',color='blue')
+	plt.title('%s (%d,%d)'%(subcube,plot_coords[0],plot_coords[1]))
+	plt.xlabel(r'Wavelength ($\mu$m)', fontsize = 10)
+	plt.ylabel(r'Flux Density (MJy sr$^{-1}$)',fontsize = 10)
+	plt.xticks(fontsize = 8)
+	plt.yticks(fontsize = 8)
+	plt.minorticks_on()
+	plt.gca().tick_params(which='both',direction='in')
+	plt.legend()
+	plt.savefig(saveto,dpi=200,bbox_inches='tight')
+
+
 #Continuum estimation.
 def automatic_continuum_cube(fn,num_std = 5 ,lam = 1e4,scale=5,saveto='',saveto_plots='',verbose=False,um_cut=27.5):
-	data_cube,unc_cube,dq_cube,hdr,um,shp = unpack_hdu(hdu_fn)
+	data_cube,unc_cube,dq_cube,hdr,um,shp = unpack_hdu(fn)
 
 
 	cube_shp = np.shape(data_cube)
@@ -156,6 +208,12 @@ def automatic_continuum_cube(fn,num_std = 5 ,lam = 1e4,scale=5,saveto='',saveto_
 	cont_cube = np.full(cube_shp,np.nan)
 	unc_cont_cube = np.full(cube_shp,np.nan)
 	dq_cont_cube = np.full(cube_shp,np.nan)
+
+
+	ra, dec, wcs = ['03h25m38.8898s','+30d44m05.612s', WCS(hdr)]
+	ra, dec, wcs = ['03h25m38.7708s','+30d44m08.823s', WCS(hdr)]
+	plot_coords = radec_to_pixels(ra, dec, wcs.dropaxis(2))
+
 
 	for idx in tqdm(range(shp[0])):
 		for idy in range(shp[1]):
@@ -180,19 +238,13 @@ def automatic_continuum_cube(fn,num_std = 5 ,lam = 1e4,scale=5,saveto='',saveto_
 					dq_cont_cube[um_inds,idx,idy] = dq
 
 					if (0):
-						if (idx==30) & (idy == 30):
-							#if (saveto_plots != 0) & (idx %2 == 0) & (idy %2 == 0):
-							plt.figure(figsize = (9,4))
-							plt.plot(um,data_cube[:,idx,idy],color='grey',alpha=0.2,label='data')
-							plt.plot(um,flux,color='red',label='continuum')
-							plt.plot(um,baseline,color='green',linestyle='dotted',label='baseline')
-							plt.xlabel('Wavelength (um)')
-							plt.ylabel('Flux Density (MJy sr-1)')
-							plt.title('Pixel (x,y) = (%d,%d)'%(idy,idx))
-							plt.legend()
-							plt.show()
-							#plt.savefig(saveto_plots + '%scontinuumx%dy%d.png'%(subcube,idx,idy),bbox_inches='tight',dpi=75)
-							#plt.close()
+						
+
+						if (idx==plot_coords[0]) & (idy == plot_coords[1]):
+							
+							saveto_fig = saveto.split('.fits')[0] + '_%s_cont%d_%d.png'%(subcube,plot_coords[0],plot_coords[1])
+							print(saveto_fig)
+							continuum_masking_figure(um,data_cube[:,idx,idy],flux,baseline,subcube,plot_coords,saveto_fig)
 
 
 				except:
@@ -224,7 +276,16 @@ def automatic_continuum_cube(fn,num_std = 5 ,lam = 1e4,scale=5,saveto='',saveto_
 		print('Continuum cube saved!')
 	return cont_cube,unc_cont_cube,dq_cont_cube
 
-
+def cont_integrated_map(um,cont_cube,unc_cont_cube,wcs_2D,saveto=None,n_sigma=5):
+	cont_cube[cont_cube < n_sigma*unc_cont_cube] = np.nan
+	dum = np.array([um[1]-um[0]]*len(cont_cube))
+	cont_map = np.nansum(multiply_along_axis(cont_cube,dum,0),axis = 0)
+	if saveto:
+		hdr = wcs_2D.to_header()
+		hdr['UNIT'] = 'MJy sr-1 um'
+		hdu = fits.PrimaryHDU(data = cont_map,header=hdr)
+		hdu.writeto(saveto,overwrite=True)
+	return cont_map
 
 
 def get_cont_cube(data_cube,um,method=None,cont_filename=None,sep=','):
