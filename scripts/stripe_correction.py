@@ -12,8 +12,11 @@ from tqdm import tqdm
 
 sub_names =['short','medium','long']
 subchannel_arr =  ['ch1-%s'%(x) for x in sub_names]+['ch2-%s'%(x) for x in sub_names]+['ch3-%s'%(x) for x in sub_names] +['ch4-%s'%(x) for x in sub_names]
+
+subchannel_arr = ['ch4-long']
+
 output_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_post_processing/'
-saveto_plots = None#output_foldername + 'continuum_identification/L1448-mm_'
+saveto_plots = output_foldername
 
 for subchannel in subchannel_arr:
 	print('Doing subchannel %s'%(subchannel))
@@ -28,7 +31,7 @@ for subchannel in subchannel_arr:
 	data_cube,unc_cube,dq_cube,hdr,um,shp = unpack_hdu(hdu_fn)
 	wcs = WCS(hdr)
 	wcs = wcs.dropaxis(2)
-	aper_coords = ['03h25m38.8898s','+30d44m05.612s']
+	#aper_coords = ['03h25m38.8898s','+30d44m05.612s']
 
 
 	

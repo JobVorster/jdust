@@ -45,9 +45,9 @@ subband_arr = ['2C','3A','3B','3C','4A','4B','4C']
 #['ch1-short','ch1-medium','ch1-long','ch2-short','ch2-medium']
 fn_band_arr = ['ch2-long','ch3-short','ch3-medium','ch3-long','ch4-short','ch4-medium','ch4-long']
 
-#Testing
-#subband_arr = ['3B']
-#fn_band_arr = ['ch3-medium']
+#Single subband
+subband_arr = ['4C']
+fn_band_arr = ['ch4-long']
 
 fn_arr = ['/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_post_processing/L1448-mm_%s_s3d_LSRcorr_stripecorr.fits'%(x) for x in fn_band_arr]
 cont_fn_arr = ['/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_post_processing/L1448-mm_%s_cont.fits'%(x) for x in fn_band_arr]
@@ -89,7 +89,7 @@ for filename,cont_filename,subband,SNR_percentile in zip(fn_arr,cont_fn_arr,subb
 
 	psfsub_cube,x_offset_arr,y_offset_arr,scaling_arr = subtract_psf_cube(fn=filename,subband=subband,
 		mask_method=mask_method,mask_par=mask_par,aper_coords = aper_coords,wcs = wcs,
-		saveto=saveto,mask_psfsub=mask_psfsub,bfe_factor=bfe_factor,flagged_channels=flagged_channels,
+		saveto=saveto,mask_psfsub=mask_psfsub,bfe_factor=bfe_factor,
 		saveto_psf_gen=saveto_psf_gen,saveto_psf_cube=saveto_psf_cube)
 
 #	Current options.

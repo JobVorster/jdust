@@ -18,7 +18,7 @@ sub_names =['short','medium','long']
 subchannel_arr =  ['ch1-%s'%(x) for x in sub_names]+['ch2-%s'%(x) for x in sub_names]+['ch3-%s'%(x) for x in sub_names] +['ch4-%s'%(x) for x in sub_names]
 
 
-#subchannel_arr = ['ch3-long']
+subchannel_arr = ['ch4-long']
 output_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_post_processing/PSF_Subtraction/'
 saveto_plots = None
 verbose =False
@@ -40,11 +40,15 @@ for subchannel in subchannel_arr:
 	saveto_nosub = output_foldername + 'L1448-mm_%s_s3d_LSRcorr_stripecorr_contcube.fits'%(subchannel)
 	saveto_nosub_2D = output_foldername + 'L1448-mm_%s_s3d_LSRcorr_stripecorr_cont2D.fits'%(subchannel)
 
+	#Maps where psf subtraction has been done.
 	if do_cont_cube:
 		cont_cube,unc_cont_cube,dq_cont_cube = automatic_continuum_cube(fn=hdu_fn,saveto = saveto,verbose=verbose)
 	else:
 		cont_cube,unc_cont_cube,dq_cont_cube = [fits.open(saveto)[i].data for i in [1,2,3]]
 
+	cont_map = cont_integrated_map(um,cont_cube,unc_cont_cube,wcs_2D,saveto=saveto_2D,n_sigma=5)
+
+	#Maps where no psf subtraction has been done.
 	fn_no_psfsub = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_post_processing/L1448-mm_%s_s3d_LSRcorr_stripecorr.fits'%(subchannel)
 
 	if do_cont_cube_nosub:
@@ -52,7 +56,6 @@ for subchannel in subchannel_arr:
 	else:
 		cont_cube_nosub,unc_cont_cube_nosub,dq_cont_cube_nosub = [fits.open(fn_no_psfsub)[i].data for i in [1,2,3]]
 
-	cont_map = cont_integrated_map(um,cont_cube,unc_cont_cube,wcs_2D,saveto=saveto_2D,n_sigma=5)
 	cont_map_nosub = cont_integrated_map(um,cont_cube_nosub,unc_cont_cube_nosub,wcs_2D,saveto=saveto_nosub_2D,n_sigma=5)
 
 
