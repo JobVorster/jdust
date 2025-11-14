@@ -324,7 +324,7 @@ def get_cube_offsets_scaling(um,data_cube,unc_cube,subband,mask_method,base_fact
 
 
 
-def generate_psf_cube(fn,subband,mask_method,mask_par,aper_coords = None,wcs = None,flagged_channels = None,saveto_psf_gen=None,saveto_psf_cube=None,base_factor=1):
+def generate_psf_cube(fn,subband,mask_method,mask_par,aper_coords = None,wcs = None,saveto_psf_gen=None,saveto_psf_cube=None,base_factor=1):
 	#Unpack and set up variables.
 	data_cube,unc_cube,dq_cube,hdr,um,shp = unpack_hdu(fn)
 	psf_cube = np.zeros(np.shape(data_cube))
@@ -366,7 +366,7 @@ def get_aper_mask(um,aper_coords,base_factor,wcs,shp):
 	return aper_mask
 
 
-def subtract_psf_cube(fn,subband,mask_method,mask_par,psf_filename = None,aper_coords = None,wcs = None,saveto=None,mask_psfsub=False,bfe_factor=0,flagged_channels = None,saveto_psf_gen=None,saveto_psf_cube=None):
+def subtract_psf_cube(fn,subband,mask_method,mask_par,psf_filename = None,aper_coords = None,wcs = None,saveto=None,mask_psfsub=False,bfe_factor=0,saveto_psf_gen=None,saveto_psf_cube=None):
 	'''
 	UPDATE DOCUMENTATION!
 	Point Spread Function subtraction for an entire MIRI MRS cube.
@@ -445,7 +445,7 @@ def subtract_psf_cube(fn,subband,mask_method,mask_par,psf_filename = None,aper_c
 	base_factor = 1
 
 
-	psf_cube,x_offset_arr,y_offset_arr,scaling_arr = generate_psf_cube(fn,subband,mask_method,mask_par,aper_coords,wcs,flagged_channels,saveto_psf_gen,saveto_psf_cube,base_factor)
+	psf_cube,x_offset_arr,y_offset_arr,scaling_arr = generate_psf_cube(fn,subband,mask_method,mask_par,aper_coords,wcs,saveto_psf_gen,saveto_psf_cube,base_factor)
 
 	for channel, (chan_map, unc_map) in enumerate(zip(data_cube,unc_cube)):	
 		print('Channel %d of %d'%(channel,len(data_cube)))

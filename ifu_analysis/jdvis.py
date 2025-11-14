@@ -6,6 +6,7 @@ from astropy.visualization.wcsaxes import WCSAxes,add_beam
 from astropy.wcs import WCS
 import astropy.units as u
 
+
 ################################
 # Constants					   #
 ################################
@@ -190,9 +191,9 @@ def generate_image_grid(shp,figsize,wcs_arr=None):
 
 def annotate_imshow(ax,hdr,hide_ticks=False,do_minor_ticks=False,
 	beam_fwhm=None,RA_format = 'hh:mm:ss.ss',Dec_format = 'dd:mm:ss.s',
-	source_name=None,wavelength=None,img_type=None,fontdict={'va': 'center','ha': 'left','fontsize':12,'color':'white'},
+	source_name=None,wavelength=None,img_type=None,fontdict={'va': 'center','ha': 'left','fontsize':12,'color':'red'},
 	linear_scale = None, distance = None,
-	add_colorbar=False,colorbar_label=None,dogrid=False):
+	add_colorbar=False,colorbar_label=None,dogrid=False,star_pos = None):
 	'''
 	INSERT DOCSTRING HERE!!
 	'''
@@ -242,7 +243,7 @@ def annotate_imshow(ax,hdr,hide_ticks=False,do_minor_ticks=False,
 
 	#Beam fwhm must be in arcsec.
 	if beam_fwhm:
-		add_beam(ax,major=beam_fwhm*u.arcsec,minor=beam_fwhm*u.arcsec,angle=0,fc=None,ec='white',fill=None)
+		add_beam(ax,major=beam_fwhm*u.arcsec,minor=beam_fwhm*u.arcsec,angle=0,fc=None,ec='red',fill=None)
 
 	#Annotation of title etc.
 	if source_name or wavelength or img_type:
@@ -255,10 +256,24 @@ def annotate_imshow(ax,hdr,hide_ticks=False,do_minor_ticks=False,
 			annotate_str += img_type + '\n'
 
 		#Add annotation to the figure.
-		extent_perc = 0.2
-		xorigin = xlim[0]+0.3*extent_perc*xextent
-		yorigin = ylim[1]-extent_perc*yextent
-		ax.text(xorigin,yorigin,annotate_str,**fontdict)
+		option = 'top_left'
+		if option == 'top_left':
+			extent_perc = 0.2
+			xorigin = xlim[0]+0.3*extent_perc*xextent
+			yorigin = ylim[1]-extent_perc*yextent
+			ax.text(xorigin,yorigin,annotate_str,**fontdict)
+		elif option =='bottom_left':
+			extent_perc = 0.2
+			xorigin = xlim[0]+0.3*extent_perc*xextent
+			yorigin = ylim[0]+extent_perc*yextent
+			ax.text(xorigin,yorigin,annotate_str,**fontdict)
+
+	#Star position
+	if star_pos:
+		sky_coord = SkyCoord(star_pos[0],star_pos[1], unit=(u.hourangle, u.deg))
+		x_star, y_star = wcs.wcs_world2pix(sky_coord.ra.deg,sky_coord.dec.deg,0)
+		ax.scatter([x_star],[y_star],marker='*',facecolor='white',edgecolor='black',s=300)
+
 
 	#Scalebar.
 	if linear_scale or distance:
@@ -280,10 +295,10 @@ def annotate_imshow(ax,hdr,hide_ticks=False,do_minor_ticks=False,
 			xplot = [xorigin,xorigin+npixels]
 			yplot = [yorigin,yorigin]
 
-			ax.plot(xplot,yplot-yextent*0.04,color='white',linewidth=2.5)
+			ax.plot(xplot,yplot-yextent*0.04,color='red',linewidth=2.5)
 			xtext = np.mean(xplot)
 			ytext = yorigin
-			ax.text(xtext,ytext,lin_str,color='white',va='center',ha='center',fontsize = 10)
+			ax.text(xtext,ytext,lin_str,color='red',va='center',ha='center',fontsize = 10)
 
 	if add_colorbar:
 		cbar_tick_fontsize = 10

@@ -42,6 +42,9 @@ def jpipe_extract_spectrum(filename,aperture,bkg_sigma_clip=10):
 	#####
 	input_model = IFUCubeModel(filename)
 	prefix = filename.split('/')[-1].split('.fits')[0]
+
+	print('Extracting spectrum from file %s'%(prefix))
+
 	hdr = fits.open(filename)[1].header
 	wcs = WCS(hdr).dropaxis(2)
 

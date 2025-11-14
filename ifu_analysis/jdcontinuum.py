@@ -185,6 +185,7 @@ def continuum_masking_figure(um,flux,flux_masked,baseline,subcube,plot_coords,sa
 	plt.plot(um,flux,label='observation',color='grey',alpha=0.3)
 	plt.plot(um,flux_masked,label='lines masked',color='red')
 	plt.plot(um,baseline,label='baseline',color='blue')
+	plt.show()
 	plt.title('%s (%d,%d)'%(subcube,plot_coords[0],plot_coords[1]))
 	plt.xlabel(r'Wavelength ($\mu$m)', fontsize = 10)
 	plt.ylabel(r'Flux Density (MJy sr$^{-1}$)',fontsize = 10)
@@ -193,11 +194,12 @@ def continuum_masking_figure(um,flux,flux_masked,baseline,subcube,plot_coords,sa
 	plt.minorticks_on()
 	plt.gca().tick_params(which='both',direction='in')
 	plt.legend()
+	plt.show()
 	plt.savefig(saveto,dpi=200,bbox_inches='tight')
 
 
 #Continuum estimation.
-def automatic_continuum_cube(fn,num_std = 5 ,lam = 1e4,scale=5,saveto='',saveto_plots='',verbose=False,um_cut=27.5):
+def automatic_continuum_cube(fn,num_std = 3 ,lam = 1e4,scale=5,saveto='',saveto_plots='',verbose=False,um_cut=27.5):
 	data_cube,unc_cube,dq_cube,hdr,um,shp = unpack_hdu(fn)
 
 
@@ -209,10 +211,10 @@ def automatic_continuum_cube(fn,num_std = 5 ,lam = 1e4,scale=5,saveto='',saveto_
 	unc_cont_cube = np.full(cube_shp,np.nan)
 	dq_cont_cube = np.full(cube_shp,np.nan)
 
-
-	ra, dec, wcs = ['03h25m38.8898s','+30d44m05.612s', WCS(hdr)]
-	ra, dec, wcs = ['03h25m38.7708s','+30d44m08.823s', WCS(hdr)]
-	plot_coords = radec_to_pixels(ra, dec, wcs.dropaxis(2))
+	if (1):
+		ra, dec, wcs = ['03h25m38.8898s','+30d44m05.612s', WCS(hdr)]
+		ra, dec, wcs = ['03h25m38.7708s','+30d44m08.823s', WCS(hdr)]
+		plot_coords = radec_to_pixels(ra, dec, wcs.dropaxis(2))
 
 
 	for idx in tqdm(range(shp[0])):
@@ -222,10 +224,20 @@ def automatic_continuum_cube(fn,num_std = 5 ,lam = 1e4,scale=5,saveto='',saveto_
 			flux = data_cube[um_inds,idx,idy].copy()
 			flux_unc = unc_cube[um_inds,idx,idy].copy()
 			dq = dq_cont_cube[um_inds,idx,idy].copy()
-			if len(um)!=0:
+
+			if (idx==plot_coords[0]) & (idy == plot_coords[1]):
+
+				baseline_fitter = Baseline(um[um_inds], check_finite=True)
+				baseline, params = baseline_fitter.fabc(flux, lam=lam,scale=scale,num_std=num_std)
+
+				plt.plot(um[um_inds],flux)
+				plt.show()
+
+			if len(um_inds)!=0:
 				try:
 					baseline_fitter = Baseline(um[um_inds], check_finite=True)
 					baseline, params = baseline_fitter.fabc(flux, lam=lam,scale=scale,num_std=num_std)
+
 					mask = params['mask']
 					dum = abs(um[0]-um[1])
 
@@ -237,7 +249,7 @@ def automatic_continuum_cube(fn,num_std = 5 ,lam = 1e4,scale=5,saveto='',saveto_
 					unc_cont_cube[um_inds,idx,idy] = flux_unc
 					dq_cont_cube[um_inds,idx,idy] = dq
 
-					if (0):
+					if (1):
 						
 
 						if (idx==plot_coords[0]) & (idy == plot_coords[1]):
@@ -283,6 +295,7 @@ def cont_integrated_map(um,cont_cube,unc_cont_cube,wcs_2D,saveto=None,n_sigma=5)
 	if saveto:
 		hdr = wcs_2D.to_header()
 		hdr['UNIT'] = 'MJy sr-1 um'
+		hdr['WAVE'] = (str(np.nanmean(um)), 'MEAN WAVELENGTH OF MAP')
 		hdu = fits.PrimaryHDU(data = cont_map,header=hdr)
 		hdu.writeto(saveto,overwrite=True)
 	return cont_map
