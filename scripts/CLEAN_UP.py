@@ -27,7 +27,7 @@ from scipy.optimize import curve_fit
 			#RESULTS: Continuum vs H2 (warm + hot), atomic lines.
 			#RESULTS: 22.6 um and 19.3 um continuum vs S I (blue-redshifted)
 			#RESULTS: Continuum vs CO2, continuum vs 5 um CO, continuum vs water emission.
-			#RESULTS: Map of SO2, CH4, Warm H2O, Cold H2O (van Gelder et al. 2024 paper) compare to continuum morphology.
+			#RESULTS: Map of SO2, CH4, Warm H2O, Cold H2O compare to continuum morphology.
 				#RESULTS: Assess if there is contamination from the point source.
 				#RESULTS: S I, Fe II, CO2, Water, and continuum.
 			#RESULTS: NIRSpec CO maps.
