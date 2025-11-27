@@ -2,7 +2,9 @@ import astropy.units as u
 from scipy.optimize import curve_fit
 import astropy.constants as const
 import numpy as np
-
+from pybaselines import Baseline
+import matplotlib.pyplot as plt
+from scipy.optimize import curve_fit
 
 
 def linear(x,a,b):
@@ -51,69 +53,346 @@ def solid_angle_small_angle(radius_arcsec):
 	
 	return solid_angle  # in steradians
 
-def modified_black_body(um,scaling,T,beta,solid_angle=None,lambda0 = 850):
+def parse_absorption(x, tau, interp_um = None,do_flip=False,wavenumber = False):
 	'''
-	Modified blackbody (MBB) for wavelengths. This function returns in units of Jy if solid_angle is specified or Jy/sr if it is not.
+	Format absorption from wavenumber to wavelength (micron). Option to interpolate to a specified grid.
 
 	Parameters
 	----------
+	wavenumber : array
+		Wavenumber in cm-1
+
+	tau : array
+		Optical depth of absorption.
+	
+	interp_um : array (optional)
+		Wavelength to interpolate to.
+
+	Returns
+	-------
+	
+	um : array
+		Wavelength array of absorption, regridded if interp_um is specified.
+
+	tau : array
+		Reformatted absorption optical depth.
+	'''
+	um_to_cm = 1e4
+	if wavenumber:
+		um = um_to_cm/x
+	else: 
+		um = x
+	if do_flip:
+		tau = np.flip(tau)
+	if len(interp_um)> 0:
+		tau = np.interp(interp_um,um,tau)
+		um = interp_um
+	return um, tau
+
+def convert_flux_wl(wavelength, flux):
+	'''
+	Convert flux from units of Jy to W cm-2. Function by Katie Slavicinska.
+
+	Parameters
+	----------
+	wavelength : array
+		Wavelength in microns
+
+	flux : array
+		Flux density in Jy.
+	
+	Returns
+	-------
+
+	new_flux : array
+		Flux density in W cm-2
+	'''
+	c = 299792458 #Speed of light, m s-1
+	m_to_cm = 1e-2
+
+
+	#flux is in Jy: 1e-26 W m-2 Hz-1
+	wavelength = wavelength*1e-6 #Convert from um to m.
+
+	freq = c/wavelength #Hz
+	new_flux = freq * flux #1e-26 W m-2
+	
+	new_flux = new_flux * (1e-26 * m_to_cm**2) #W cm-2
+	return new_flux
+
+def calculate_information_criterion(x, y, model, popt):
+	'''
+	Calculates the Baysian information criterion and Akaike information criterion for data with a model and a fit.
+	
+	This is useful for model selection. These criteria are most useful if the model and data are in units of order unity.
+
+	Parameters:
+	-----------
+
+	x : array
+		Independent variable of data.
+
+	y : array
+		Dependent variable of data.
+
+	model : function
+		Function that specifies a specific model.
+
+	popt : array
+		Best fit parameters for the specified model.
+
+	Returns:
+	--------
+
+	AIC : integer
+		Akaike information criterion
+	
+	BIC : integer
+		Baysian information criterion
+
+	'''
+
+
+	#Residual
+	residual_e = y - model(x,*popt)
+
+	#Likelihood
+	residual_SSE = np.nansum(residual_e**2)
+
+	#Number of data points
+	n = len(x)
+	#Number of parameters.	
+	k = len(popt)
+
+	#Hope this is correct. I copied it from lecture notes. A reference would be helpful.
+	AIC = n*np.log(residual_SSE/n) + 2*k
+	BIC = n*np.log(residual_SSE/n) + np.log(n)*k
+	return AIC, BIC
+
+def fit_model(um, flux, flux_unc,model,p0):
+	'''
+	Fit the spectra to a model. 
+
+	This function requires some setup to use. The user has to specify the different model options, and add the relevant function.
+	The user also has to specify a dictionary p0_dict with the initial guesses for all models. It is handy as it can be set at the top of the script.
+
+	Parameters:
+	-----------
 
 	um : array
 		Wavelengths in microns.
 
-	scaling : float
-		Scaling factor (unitless)
+	flux : array
+		Flux density in units the same as the model.
 
-	T : float
-		Temperature in Kelvin.
+	flux : array
+		Flux density uncertainty in units the same as the flux and model.
 
-	beta : float
-		Spectral index of modified black body.
+	fitoption : string
+		Which model to fit to.
 
-	solid_angle : float (Optional)
-		Solid angle of source, result will be returned in Jy if solid_angle is specified.
+	p0_dict : dictionary
+		Dictionary where p0_dict[fitotion] is an array with the inital guess for each parameter.
 
-	lambda0 : float
-		Reference wavelength for MBB in micron.
+	Returns:
+	--------
 
-	Returns
-	-------
+	popt : array
+		Best fit for each parameter for the relevant model.
 
-	mbb : array
-		Modified blackbody in either Jy or Jy/sr.
-
+	pcov : 2D array
+		Covariance for each parameter.
 	'''
-	nu = const.c.value/(um*1e-6)
-	nu0 = const.c.value/(lambda0*1e-6)
-	mbb = scaling*blackbody_lambda(um, T, solid_angle)*(nu/nu0)**(beta)
-	return mbb
+	relative_unc = flux_unc/flux #Relative uncertainties.
+	popt,pcov = curve_fit(model, um, flux, p0 = p0, sigma = relative_unc)
+	return popt,pcov
 
 
-def blackbody_lambda(um,T,solid_angle):
+def load_absorption(wav):
+	'''
+	Utility function to read all absorptions for the various models.
+	Note the very shady use of hardcoded directories. It is because I am using it inside models that will be used inside curve_fit.
+	I do not know how to give parameters to functions inside curve_fit that are not fit.
+	'''
+	absorption_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/input-files/absorption/'
+	wavenumber_h2o15K, tau_h2o15K = np.transpose(np.genfromtxt(absorption_foldername+ '2023-08-18_hdo-h2o_1-200_thin(118)_154_blcorr.csv', delimiter=','))
+	wavenumber_h2o150K, tau_h2o150K = np.transpose(np.genfromtxt(absorption_foldername +'2023-08-18_hdo-h2o_1-200_thin(27)_1500_blcorr.csv', delimiter=','))
+	wavenumber_sil, tau_olivine, tau_pyroxene = np.transpose(np.genfromtxt(absorption_foldername + "adwin_silicates.csv", delimiter=",", skip_header=0))
 
-	#um in micron.
-	#T in Kelvin
-	T = T*u.K
-	um = um*1e-6*u.m #to meter.
-	c_light = const.c #m s-1
-	h = const.h #J s
-	k_B = const.k_B #J K-1
-	kT = k_B*T
-	photon_energy = h*c_light/um
+	#Reformat absorption data.
+	_, tau_h2o15K = parse_absorption(wavenumber_h2o15K, tau_h2o15K, interp_um = wav,do_flip=True,wavenumber=True)
+	_, tau_h2o150K = parse_absorption(wavenumber_h2o150K, tau_h2o150K, interp_um = wav,do_flip=True,wavenumber=True)
+	_, tau_olivine = parse_absorption(wavenumber_sil, tau_olivine, interp_um = wav)
+	_, tau_pyroxene = parse_absorption(wavenumber_sil, tau_pyroxene, interp_um = wav)
 
-	B_lambda = 2*photon_energy*c_light*um**-4/(np.exp(photon_energy/kT)-1)
-	B_nu = B_lambda * um**2 / c_light
+	return tau_h2o15K, tau_h2o150K, tau_olivine, tau_pyroxene
 
-	#W·m^-2·Hz^-1
-	jy_factor = 1e26
-	if solid_angle is not None:
-		# Multiply by solid angle to get flux density in W·m^-2·Hz^-1
-		# Then convert to Jy
-		result = B_nu * solid_angle * jy_factor  # Jy
+
+
+
+	# blackbody function
+def blackbody(wav, temp,scaling):
+	'''
+	Function by Katie Slavicinska.
+	'''
+	#FIX!! APRAD IS SET MANUALLY EQUAL TO THE APERTURE SIZE.
+	ap_rad = 0.7
+
+	h = 6.626e-34 # W s^2
+	c = 2.998e8 # m s^-1
+	k = 1.381e-23 # J K^-1
+	wav = wav*1e-6 # um --> m
+	freq = c * 1/wav # m --> 1/s
+	radiance = 2*h*freq**3/(c**2) * (1/(np.exp(h*freq/(k*temp)))) # W m^2 sr-1 Hz-1
+	radiance = radiance/1e4 # W cm^2 sr^-1 Hz^-1
+	radiance = radiance*freq # W cm^2 sr^-1
+	area = np.pi*ap_rad**2/4.25e10 # arcsec^2 --> sr
+	radiance = radiance*area # W cm^2
+	return radiance*scaling   
+
+#A load of models with combinations of sillicates: pyroxene and olivine, and water: 15 K and 150 K.
+def one_blackbody_pyroxene(wav,temp,scaling,pyroxene_scaling):
+	tau_h2o15K, tau_h2o150K, tau_olivine, tau_pyroxene = load_absorption(wav)
+	return blackbody(wav,temp,scaling)*np.exp(-pyroxene_scaling*tau_pyroxene)
+
+def one_blackbody_olivine(wav,temp,scaling,olivine_scaling):
+	tau_h2o15K, tau_h2o150K, tau_olivine, tau_pyroxene = load_absorption(wav)
+	return blackbody(wav,temp,scaling)*np.exp(-olivine_scaling*tau_olivine)
+
+def one_blackbody_pyroxene_olivine(wav,temp,scaling,pyroxene_scaling,olivine_scaling):
+	tau_h2o15K, tau_h2o150K, tau_olivine, tau_pyroxene = load_absorption(wav)
+	abs_tau = olivine_scaling*tau_olivine + pyroxene_scaling*tau_pyroxene
+	return blackbody(wav,temp,scaling)*np.exp(-abs_tau)
+
+def one_blackbody_pyroxene_olivine_15K(wav,temp,scaling,pyroxene_scaling,olivine_scaling,h2o15K_scaling):
+	tau_h2o15K, tau_h2o150K, tau_olivine, tau_pyroxene = load_absorption(wav)
+	abs_tau = olivine_scaling*tau_olivine + pyroxene_scaling*tau_pyroxene + h2o15K_scaling*tau_h2o15K
+	return blackbody(wav,temp,scaling)*np.exp(-abs_tau)
+
+def one_blackbody_pyroxene_olivine_150K(wav,temp,scaling,pyroxene_scaling,olivine_scaling,h2o150K_scaling):
+	tau_h2o15K, tau_h2o150K, tau_olivine, tau_pyroxene = load_absorption(wav)
+	abs_tau = olivine_scaling*tau_olivine + pyroxene_scaling*tau_pyroxene + h2o150K_scaling*tau_h2o150K
+	return blackbody(wav,temp,scaling)*np.exp(-abs_tau)
+
+def one_blackbody_pyroxene_olivine_15K_150K(wav,temp,scaling,pyroxene_scaling,olivine_scaling,h2o15K_scaling,h2o150K_scaling):
+	tau_h2o15K, tau_h2o150K, tau_olivine, tau_pyroxene = load_absorption(wav)
+	abs_tau = olivine_scaling*tau_olivine + pyroxene_scaling*tau_pyroxene + h2o15K_scaling*tau_h2o15K + h2o150K_scaling*tau_h2o150K
+	return blackbody(wav,temp,scaling)*np.exp(-abs_tau)
+
+def two_blackbodies(wav,temp1,scaling1,temp2,scaling2):
+	return blackbody(wav,temp1,scaling1)+ blackbody(wav,temp2,scaling2)
+
+def two_blackbodies_pyroxene(wav,temp1,scaling1,temp2,scaling2,pyroxene_scaling):
+	tau_h2o15K, tau_h2o150K, tau_olivine, tau_pyroxene = load_absorption(wav)
+	return (blackbody(wav,temp1,scaling1)+ blackbody(wav,temp2,scaling2))*np.exp(-pyroxene_scaling*tau_pyroxene)
+
+def two_blackbodies_olivine(wav,temp1,scaling1,temp2,scaling2,olivine_scaling):
+	tau_h2o15K, tau_h2o150K, tau_olivine, tau_pyroxene = load_absorption(wav)
+	return (blackbody(wav,temp1,scaling1)+ blackbody(wav,temp2,scaling2))*np.exp(-olivine_scaling*tau_olivine)
+
+def two_blackbodies_pyroxene_olivine(wav,temp1,scaling1,temp2,scaling2,pyroxene_scaling,olivine_scaling):
+	tau_h2o15K, tau_h2o150K, tau_olivine, tau_pyroxene = load_absorption(wav)
+	abs_tau = olivine_scaling*tau_olivine + pyroxene_scaling*tau_pyroxene
+	return (blackbody(wav,temp1,scaling1)+ blackbody(wav,temp2,scaling2))*np.exp(-abs_tau)
+
+def two_blackbodies_pyroxene_olivine_15K(wav,temp1,scaling1,temp2,scaling2,pyroxene_scaling,olivine_scaling,h2o15K_scaling):
+	tau_h2o15K, tau_h2o150K, tau_olivine, tau_pyroxene = load_absorption(wav)
+	abs_tau = olivine_scaling*tau_olivine + pyroxene_scaling*tau_pyroxene + h2o15K_scaling*tau_h2o15K
+	return (blackbody(wav,temp1,scaling1)+ blackbody(wav,temp2,scaling2))*np.exp(-abs_tau)
+
+def two_blackbodies_pyroxene_olivine_150K(wav,temp1,scaling1,temp2,scaling2,pyroxene_scaling,olivine_scaling,h2o150K_scaling):
+	tau_h2o15K, tau_h2o150K, tau_olivine, tau_pyroxene = load_absorption(wav)
+	abs_tau = olivine_scaling*tau_olivine + pyroxene_scaling*tau_pyroxene + h2o150K_scaling*tau_h2o150K
+	return (blackbody(wav,temp1,scaling1)+ blackbody(wav,temp2,scaling2))*np.exp(-abs_tau)
+
+def two_blackbodies_pyroxene_olivine_15K_150K(wav,temp1,scaling1,temp2,scaling2,pyroxene_scaling,olivine_scaling,h2o15K_scaling,h2o150K_scaling):
+	tau_h2o15K, tau_h2o150K, tau_olivine, tau_pyroxene = load_absorption(wav)
+	abs_tau = olivine_scaling*tau_olivine + pyroxene_scaling*tau_pyroxene + h2o15K_scaling*tau_h2o15K + h2o150K_scaling*tau_h2o150K  
+	return (blackbody(wav,temp1,scaling1)+ blackbody(wav,temp2,scaling2))*np.exp(-abs_tau)
+
+
+def snippity(um,flux, um_range):
+	inds = np.where(np.logical_and(um>um_range[0],um<=um_range[1]))[0]
+	
+	um_cut = um[inds]
+	flux_cut = flux[inds]
+	return um_cut,flux_cut
+
+def get_continuum_mask(um,flux,num_std = 6 ,lam = 1e4,scale=5,um_cut=27.5):
+	if np.sum(np.isfinite(flux))>0:
+		um_use = um
+		flux_use = flux
+
+
+		baseline_fitter = Baseline(um_use)
+		baseline, params = baseline_fitter.fabc(flux_use, lam=lam,scale=scale,num_std=num_std)
+		mask = params['mask']
+		return mask
 	else:
-		# Convert spectral radiance to Jy/sr
-		result = B_nu * jy_factor  # Jy/sr
-	return result
+		return np.zeros(np.shape(um))+1
+
+
+
+def log_likelihood(theta, x, y, yerr):
+	#theta: T1, Scaling1, T2, Scaling2, sillicate scaling
+	model = 'BB+Sillicate+Water'
+	if model == 'BB+Sillicate':
+		tbb1, sbb1, tbb2, sbb2, sillicate_scaling, log_f = theta
+		model = two_blackbodies_sillicate(x,tbb1,sbb1,tbb2,sbb2,sillicate_scaling)
+	elif model == 'BB+Sillicate+Water':
+		tbb1, sbb1, tbb2, sbb2, sillicate_scaling,water_scaling, log_f = theta
+		model = two_blackbodies_sillicate_water(x,tbb1,sbb1,tbb2,sbb2,sillicate_scaling,water_scaling)
+	sigma2 = yerr**2 + model**2 * np.exp(2 * log_f)
+	return -0.5 * np.sum((y - model) ** 2 / sigma2 + np.log(sigma2))
+
+def log_prior(theta):
+
+	model = 'BB+Sillicate+Water'
+	if model == 'BB+Sillicate':
+		tbb1, sbb1, tbb2, sbb2, sillicate_scaling, log_f = theta
+
+		if 300 < tbb1 < 1500 and 1e-9 < sbb1 < 1e-2 and 30 < tbb2 < 200 and 1e-9 < sbb1 < 1e-2 and 0 < sillicate_scaling < 1e2 and -100 < log_f < 1.0:
+			return 0.0
+	elif model == 'BB+Sillicate+Water':
+		tbb1, sbb1, tbb2, sbb2, sillicate_scaling,water_scaling, log_f = theta
+		verbose = False
+		if verbose:
+			print('tbb1: %.2E'%(tbb1))
+			print('sbb1: %.2E'%(sbb1))
+			print('tbb2: %.2E'%(tbb2))
+			print('sbb2: %.2E'%(sbb2))
+			print('sillicate_scaling: %.2E'%(sillicate_scaling))
+			print('water_scaling: %.2E'%(water_scaling))
+			print('log_f: %.2E'%(log_f))
+
+
+		tbb1_bounds = [400,2500]
+		sbb1_bounds = [0,1e-2]
+		tbb2_bounds = [15,400]
+		sbb2_bounds = [0,1e-2]
+		sillicate_scaling_bounds = [0,1e2]
+		water_scaling_bounds = [0,1e2]
+		log_f_bounds = [-200,200]
+
+		#One has to watch carefully that your bounds actually occur!
+		#If not it can cause a problem where the MCMC is constant for all iterations.
+		if tbb1_bounds[0] < tbb1 < tbb1_bounds[1] and sbb1_bounds[0] < sbb1 < sbb1_bounds[1] and tbb2_bounds[0] < tbb2 < tbb2_bounds[1] and 0 < sbb1 < 1e-2 and sbb2_bounds[0] < sillicate_scaling < sbb2_bounds[1] and water_scaling_bounds[0]<water_scaling <water_scaling_bounds[1]  and log_f_bounds[0] < log_f < log_f_bounds[1]:
+			if verbose:
+				print('Occured!')
+				exit()
+			return 0.0
+	return -np.inf
+
+def log_probability(theta, x, y, yerr):
+	lp = log_prior(theta)
+	if not np.isfinite(lp):
+		return -np.inf
+	return lp + log_likelihood(theta, x, y, yerr)
+
+
+
+
+
 
 
 def fit_linear_slope(um,flux_arr,unc_arr):
