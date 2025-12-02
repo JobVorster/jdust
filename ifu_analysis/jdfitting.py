@@ -5,8 +5,8 @@ import numpy as np
 from pybaselines import Baseline
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
-
-
+from lmfit import minimize, Parameters, Parameter, report_fit
+from scipy.stats import chi2
 def linear(x,a,b):
 	'''
 	Linear function.
@@ -77,13 +77,14 @@ def parse_absorption(x, tau, interp_um = None,do_flip=False,wavenumber = False):
 	tau : array
 		Reformatted absorption optical depth.
 	'''
-	um_to_cm = 1e4
 	if wavenumber:
+		um_to_cm = 1e4
 		um = um_to_cm/x
 	else: 
 		um = x
 	if do_flip:
-		tau = np.flip(tau)
+		tau = np.flip(tau,axis=0)
+		um = np.flip(um,axis=0)
 	if len(interp_um)> 0:
 		tau = np.interp(interp_um,um,tau)
 		um = interp_um
@@ -120,7 +121,7 @@ def convert_flux_wl(wavelength, flux):
 	new_flux = new_flux * (1e-26 * m_to_cm**2) #W cm-2
 	return new_flux
 
-def calculate_information_criterion(x, y, model, popt):
+def calculate_goodness_of_fit(x, y, yerr, model, popt,pcov):
 	'''
 	Calculates the Baysian information criterion and Akaike information criterion for data with a model and a fit.
 	
@@ -154,7 +155,7 @@ def calculate_information_criterion(x, y, model, popt):
 
 
 	#Residual
-	residual_e = y - model(x,*popt)
+	residual_e = np.array(y - model(x,*popt))
 
 	#Likelihood
 	residual_SSE = np.nansum(residual_e**2)
@@ -167,9 +168,22 @@ def calculate_information_criterion(x, y, model, popt):
 	#Hope this is correct. I copied it from lecture notes. A reference would be helpful.
 	AIC = n*np.log(residual_SSE/n) + 2*k
 	BIC = n*np.log(residual_SSE/n) + np.log(n)*k
-	return AIC, BIC
 
-def fit_model(um, flux, flux_unc,model,p0):
+	#chi squared
+	chi2 = np.nansum(residual_e**2/yerr**2)
+
+	#reduced_chi squared
+	degrees_of_freedom = n-k
+	chi2_red = chi2/degrees_of_freedom
+
+	p_value = 1 - chi2.cdf(chi2, degrees_of_freedom)
+
+
+	#print('FIX: Chi2 in function calculate_goodness_of_fit was replaced by the chi2 p value, variable name is incorrect in most scripts!!')
+
+	return AIC, BIC,chi2,chi2_red
+
+def fit_model(um, flux, flux_unc,model,p0,fit_implementation = 'lmfit',no_negatives=True):
 	'''
 	Fit the spectra to a model. 
 
@@ -203,8 +217,30 @@ def fit_model(um, flux, flux_unc,model,p0):
 	pcov : 2D array
 		Covariance for each parameter.
 	'''
-	relative_unc = flux_unc/flux #Relative uncertainties.
-	popt,pcov = curve_fit(model, um, flux, p0 = p0, sigma = relative_unc)
+	if fit_implementation == 'curve_fit':
+		relative_unc = flux_unc/flux #Relative uncertainties.
+		popt,pcov = curve_fit(model, um, flux, p0 = p0, sigma = relative_unc)
+	elif fit_implementation =='lmfit':
+
+		def fmin(params, xdata,ydata,yunc,model):
+			paramvals = []
+			for p in params.keys():
+				paramvals.append(params[p].value)
+			return (ydata - model(xdata,*paramvals))/yunc
+		params = Parameters()
+		for i,p0val in enumerate(p0):
+			if no_negatives:
+				params.add('par' + str(i),value= p0val,min=0,max=5000)
+			else:
+				params.add('par' + str(i),value= p0val,max=5000)
+		result = minimize(fmin,params,args=(um,flux,flux_unc,model))
+		popt = []
+		resultparams = result.params
+
+		for p in resultparams.keys():
+			popt.append(resultparams[p].value)
+		pcov = result.covar
+
 	return popt,pcov
 
 
@@ -224,7 +260,6 @@ def load_absorption(wav):
 	_, tau_h2o150K = parse_absorption(wavenumber_h2o150K, tau_h2o150K, interp_um = wav,do_flip=True,wavenumber=True)
 	_, tau_olivine = parse_absorption(wavenumber_sil, tau_olivine, interp_um = wav)
 	_, tau_pyroxene = parse_absorption(wavenumber_sil, tau_pyroxene, interp_um = wav)
-
 	return tau_h2o15K, tau_h2o150K, tau_olivine, tau_pyroxene
 
 
