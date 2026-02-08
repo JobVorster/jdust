@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
 from lmfit import minimize, Parameters, Parameter, report_fit
 from scipy.stats import chi2
+from spectres import spectres
+import optool
 def linear(x,a,b):
 	'''
 	Linear function.
@@ -176,14 +178,11 @@ def calculate_goodness_of_fit(x, y, yerr, model, popt,pcov):
 	degrees_of_freedom = n-k
 	chi2_red = chi2/degrees_of_freedom
 
-	p_value = 1 - chi2.cdf(chi2, degrees_of_freedom)
-
-
 	#print('FIX: Chi2 in function calculate_goodness_of_fit was replaced by the chi2 p value, variable name is incorrect in most scripts!!')
 
 	return AIC, BIC,chi2,chi2_red
 
-def fit_model(um, flux, flux_unc,model,p0,fit_implementation = 'lmfit',no_negatives=True):
+def fit_model(um, flux, flux_unc,model,p0,model_parameters,single_bound_dict,fit_implementation = 'lmfit'):
 	'''
 	Fit the spectra to a model. 
 
@@ -226,13 +225,17 @@ def fit_model(um, flux, flux_unc,model,p0,fit_implementation = 'lmfit',no_negati
 			paramvals = []
 			for p in params.keys():
 				paramvals.append(params[p].value)
-			return (ydata - model(xdata,*paramvals))/yunc
+			#This use to not be squared.
+			return (ydata - model(xdata,*paramvals))**2/yunc**2
 		params = Parameters()
 		for i,p0val in enumerate(p0):
-			if no_negatives:
-				params.add('par' + str(i),value= p0val,min=0,max=5000)
+			model_par = model_parameters[i]
+			if model_par in single_bound_dict.keys():
+				lower_limit,upper_limit = single_bound_dict[model_par]
+				params.add(model_parameters[i],value= p0val,min=lower_limit,max=upper_limit)
 			else:
-				params.add('par' + str(i),value= p0val,max=5000)
+				params.add(model_parameters[i],value= p0val)
+
 		result = minimize(fmin,params,args=(um,flux,flux_unc,model))
 		popt = []
 		resultparams = result.params
@@ -243,6 +246,32 @@ def fit_model(um, flux, flux_unc,model,p0,fit_implementation = 'lmfit',no_negati
 
 	return popt,pcov
 
+def grab_p0_bounds(source_name,aperture,model_parameters,model_str,p0_dict,bounds_dict):
+	#Default is to not consider the sourcename or aperture (best for initial runs.)
+	p0 = p0_dict['ALL:ALL:%s'%(model_str)]
+
+	#If p0 is set for a specific aperture.
+	#Both the source and aperture names have to match exactly.
+	p0_keys = p0_dict.keys()
+	for p0_key in p0_keys:
+		source,ape,mod = p0_key.split(':')
+		if (source == source_name) and (ape == aperture):
+			p0 = p0_dict[p0_key]
+
+
+	bound_keys = bounds_dict.keys()
+
+	#Bounds for this source/aperture/model case.
+	single_bound_dict = {}
+	for bound_key in bound_keys:
+
+		source,ape,mod,par = bound_key.split(':')
+		for model_par in model_parameters:
+			if par == model_par:
+				single_bound_dict[model_par] = bounds_dict['ALL:ALL:%s:%s'%(mod,par)]
+				if (source == source_name) and (ape == aperture):
+					single_bound_dict[model_par] = bounds_dict[bound_key]
+	return p0, single_bound_dict
 
 def load_absorption(wav):
 	'''
@@ -265,14 +294,10 @@ def load_absorption(wav):
 
 
 
-	# blackbody function
 def blackbody(wav, temp,scaling):
 	'''
 	Function by Katie Slavicinska.
 	'''
-	#FIX!! APRAD IS SET MANUALLY EQUAL TO THE APERTURE SIZE.
-	ap_rad = 0.7
-
 	h = 6.626e-34 # W s^2
 	c = 2.998e8 # m s^-1
 	k = 1.381e-23 # J K^-1
@@ -281,9 +306,11 @@ def blackbody(wav, temp,scaling):
 	radiance = 2*h*freq**3/(c**2) * (1/(np.exp(h*freq/(k*temp)))) # W m^2 sr-1 Hz-1
 	radiance = radiance/1e4 # W cm^2 sr^-1 Hz^-1
 	radiance = radiance*freq # W cm^2 sr^-1
-	area = np.pi*ap_rad**2/4.25e10 # arcsec^2 --> sr
+	apsize = 0.75
+	area = apsize**2/4.25e10 # arcsec^2 --> sr
 	radiance = radiance*area # W cm^2
 	return radiance*scaling   
+
 
 #A load of models with combinations of sillicates: pyroxene and olivine, and water: 15 K and 150 K.
 def one_blackbody_pyroxene(wav,temp,scaling,pyroxene_scaling):
@@ -345,6 +372,143 @@ def two_blackbodies_pyroxene_olivine_15K_150K(wav,temp1,scaling1,temp2,scaling2,
 	abs_tau = olivine_scaling*tau_olivine + pyroxene_scaling*tau_pyroxene + h2o15K_scaling*tau_h2o15K + h2o150K_scaling*tau_h2o150K  
 	return (blackbody(wav,temp1,scaling1)+ blackbody(wav,temp2,scaling2))*np.exp(-abs_tau)
 
+def results_to_terminal_str(source_name,aperture,popt,pcov,model_parameters,COL_WIDTH):
+		format_spec = f"{{:<{COL_WIDTH}}}"
+		OKBLUE = '\033[94m'
+		OKCYAN = '\033[96m'
+		OKGREEN = '\033[92m'
+		WARNING = '\033[93m'
+		FAIL = '\033[91m'
+		ENDC = '\033[0m'
+		BOLD = '\033[1m'
+		UNDERLINE = '\033[4m'
+
+
+		if pcov is not None:
+			statistical_unc = np.sqrt(np.diag(pcov))
+		else:
+			statistical_unc = [np.nan]*len(popt)
+		print_arr = [source_name,aperture]
+
+		do_RED = False
+		do_WARNING = False
+		for i in range(len(popt)):
+
+			model_parameter = model_parameters[i]
+			estimate = popt[i]
+			uncertainty = statistical_unc[i]
+
+			if not np.isnan(uncertainty):
+				if uncertainty/estimate > 1:
+					do_WARNING = True
+
+			if model_parameter[0] =='T': #Temperature is integer.
+				print_arr += ['%d'%(estimate)]
+				if pcov is not None:
+					print_arr[-1] += '(%d)'%(uncertainty)
+				else:
+					print_arr[-1] += '(nan)'
+					do_RED = True
+			else:
+				print_arr += ['%.1E'%(estimate)]
+				if pcov is not None:
+					print_arr[-1] += '(%.2E)'%(uncertainty)
+				else:
+					print_arr[-1] += '(nan)'
+					do_RED = True
+
+		title_print = ''.join([format_spec]*(len(model_parameters)+2)).format(*print_arr)
+		if do_RED:
+			title_print = FAIL + title_print + ENDC
+		elif do_WARNING:
+			title_print = WARNING + title_print + ENDC
+		else:
+			title_print = OKCYAN + title_print + ENDC
+	
+		return title_print
+
+def define_spectral_grid(u_min,u_max,spectral_R):
+	#delta lambda (lambda, R) = lambda/R
+	grid = [u_min]
+	while grid[-1] < u_max:
+		grid.append(grid[-1]+grid[-1]/spectral_R) # Not sure if this is correct.
+	return np.array(grid)
+
+def prepare_spectra_for_fit(u_use,f_use,unc_use,fit_wavelengths,cont_num_std=5,um_cut=27.5,spectral_resolution=500):
+
+	#Convert from Jy to W cm-2
+	f_rad = convert_flux_wl(u_use,f_use)
+	unc_rad = convert_flux_wl(u_use,unc_use)
+	
+	um_inds = np.where(np.logical_and(u_use < um_cut,np.isfinite(f_rad)))[0]
+	u_use = u_use[um_inds]
+	f_rad = f_rad[um_inds]
+	unc_rad = unc_rad[um_inds]
+
+	cont_mask = get_continuum_mask(u_use,f_rad,num_std=cont_num_std)
+
+
+	u_noline = np.array(u_use)
+	f_noline = np.array(f_rad)
+	unc_noline = np.array(unc_rad)
+
+	if np.sum(np.isfinite(f_rad))>0:
+		u_noline[~cont_mask] = np.nan
+		f_noline[~cont_mask] = np.nan
+		unc_noline[~cont_mask] = np.nan
+
+	if spectral_resolution:
+		new_wavs = define_spectral_grid(min(u_use),max(u_use),spectral_resolution)
+		inds_finite = np.isfinite(u_noline)
+		new_fluxes, new_errs = spectres(new_wavs,u_noline[inds_finite],f_noline[inds_finite],spec_errs = unc_noline[inds_finite])
+		u_noline = new_wavs 
+		f_noline = new_fluxes
+		unc_noline = new_errs
+
+	
+
+
+	
+
+	#We will only fit within use specified ranges. Our model does not aim to explain all data.
+	fit_um = []
+	fit_flux = []
+	fit_unc = []
+
+	for fill_range in fit_wavelengths:
+		#Cuts out data of specific range.
+		um_cut,flux_cut = snippity(u_noline,f_noline,fill_range)
+		um_cut,unc_cut = snippity(u_noline,unc_noline,fill_range)
+
+		#Appends to master array.
+		fit_um+=list(um_cut)
+		fit_flux+=list(flux_cut)
+		fit_unc+=list(unc_cut)
+
+	fit_um = np.array(fit_um)
+	fit_flux = np.array(fit_flux)
+	fit_unc = np.array(fit_unc)
+
+	#Ignore nan values.
+	valid = ~np.isnan(fit_flux)
+	fit_um = fit_um[valid]
+	fit_flux = fit_flux[valid]
+	fit_unc = fit_unc[valid]
+
+	prepared_spectra = {}
+	prepared_spectra['unmasked:um'] = u_use
+	prepared_spectra['unmasked:flux'] = f_rad
+	prepared_spectra['unmasked:unc'] = unc_rad
+
+	prepared_spectra['linemasked:um'] = u_noline
+	prepared_spectra['linemasked:flux'] = f_noline
+	prepared_spectra['linemasked:unc'] = unc_noline
+
+	prepared_spectra['fitdata:um'] = fit_um
+	prepared_spectra['fitdata:flux'] = fit_flux
+	prepared_spectra['fitdata:unc'] = fit_unc
+
+	return prepared_spectra
 
 def snippity(um,flux, um_range):
 	inds = np.where(np.logical_and(um>um_range[0],um<=um_range[1]))[0]
@@ -366,7 +530,9 @@ def get_continuum_mask(um,flux,num_std = 6 ,lam = 1e4,scale=5,um_cut=27.5):
 	else:
 		return np.zeros(np.shape(um))+1
 
-
+def read_optool(fn):
+	header,lam,kabs,ksca,g = optool.readoutputfile(fn,scat=False)
+	return header,lam,kabs,ksca,g
 
 def log_likelihood(theta, x, y, yerr):
 	#theta: T1, Scaling1, T2, Scaling2, sillicate scaling

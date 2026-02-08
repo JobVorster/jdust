@@ -571,6 +571,7 @@ def stitch_subcubes(results, method='ADD',baseband = 'ch3-short'):
 		
 
 
+
 		# Apply the selected stitching method
 		if method == 'MULTIPLY':
 			vals = flux_low/flux_high
@@ -583,11 +584,22 @@ def stitch_subcubes(results, method='ADD',baseband = 'ch3-short'):
 			factor = np.nanmedian(vals)
 			factor_unc = np.nanstd(vals)
 
-			new_results['flux'][indhigh] += factor
-			#Old uncertainty calculation:
-			#new_results['flux_unc'][indhigh] = np.sqrt(new_results['flux_unc'][indhigh]**2 + factor_unc**2)
-			#BUT: One should not add uncertainties like that because the additive factor can artificially bloat uncertainties.
-			#For now the implementation leaves uncertainties untouched.
+			#Calculate relative uncertainties.
+			rel_unc = new_results['flux_unc'][indhigh]/new_results['flux'][indhigh]
+
+			#Keep the relative uncertainties constant because of stitching.
+			#NOT IMPLEMENTED, ARTIFICIALLY MAKES UNCERTAINTIES TOO LOW.
+			#unc_factor = rel_unc*(new_results['flux'][indhigh] + [factor]*len(rel_unc)) - new_results['flux_unc'][indhigh]
+
+			#new_results['flux_unc'][indhigh] += unc_factor
+
+			if 'ch4' in name_pair:
+				print('Stitching is only being done for CH4!!')
+				new_results['flux'][indhigh] += factor
+
+			print('name_pair: %s, factor: %.3E'%(name_pair,factor))
+
+
 		elif method == 'MEAN':
 			# Not implemented
 			vals = (flux_low + flux_high) / 2

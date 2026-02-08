@@ -8,6 +8,7 @@ from astropy.modeling import models, fitting
 from ifu_analysis.jdutils import is_nan_map,get_JWST_PSF,define_circular_aperture,unpack_hdu
 import numpy as np
 import stpsf
+import os
 from astropy.io import fits
 import matplotlib.pyplot as plt
 from photutils.centroids import centroid_2dg
@@ -312,15 +313,16 @@ def get_cube_offsets_scaling(um,data_cube,unc_cube,subband,mask_method,base_fact
 
 
 	if saveto_psf_gen:
-		df = pd.DataFrame(columns =['um','x_offset','y_offset','scaling'])
+		df = pd.DataFrame(columns =['um','x_offset','y_offset','scaling','mask'])
 		df['um'] = um
 		df['x_offset'] = x_offset_arr
 		df['y_offset'] = y_offset_arr
 		df['scaling'] = scaling_arr
+		df['mask'] = mask
 		df.to_csv(saveto_psf_gen)
 
 
-	return x_offset_arr,y_offset_arr,scaling_arr
+	return x_offset_arr,y_offset_arr,scaling_arr,mask
 
 
 
@@ -334,7 +336,7 @@ def generate_psf_cube(fn,subband,mask_method,mask_par,aper_coords = None,wcs = N
 	fwhm_bfe_residual = []
 	bfe_residual = []
 	
-	x_offset_arr,y_offset_arr,scaling_arr = get_cube_offsets_scaling(um,data_cube,unc_cube,subband,mask_method,base_factor,aper_coords,wcs,saveto_psf_gen)
+	x_offset_arr,y_offset_arr,scaling_arr,mask = get_cube_offsets_scaling(um,data_cube,unc_cube,subband,mask_method,base_factor,aper_coords,wcs,saveto_psf_gen)
 
 	#Over each channel
 	for channel, (chan_map, unc_map) in enumerate(zip(data_cube,unc_cube)):	
@@ -354,7 +356,7 @@ def generate_psf_cube(fn,subband,mask_method,mask_par,aper_coords = None,wcs = N
 		hdu[1].data = psf_cube
 		hdu.writeto(saveto_psf_cube,overwrite=True)
 
-	return psf_cube,x_offset_arr,y_offset_arr,scaling_arr
+	return psf_cube,x_offset_arr,y_offset_arr,scaling_arr,mask
 
 def get_aper_mask(um,aper_coords,base_factor,wcs,shp):
 	#Aperture size is defined by the law et al relation.
@@ -366,12 +368,10 @@ def get_aper_mask(um,aper_coords,base_factor,wcs,shp):
 	return aper_mask
 
 
-def subtract_psf_cube(fn,subband,mask_method,mask_par,psf_filename = None,aper_coords = None,wcs = None,saveto=None,mask_psfsub=False,bfe_factor=0,saveto_psf_gen=None,saveto_psf_cube=None):
+def subtract_psf_cube(fn,subband,mask_method,mask_par,psf_filename = None,aper_coords = None,wcs = None,saveto=None,mask_psfsub=False,bfe_factor=0,saveto_psf_gen=None,saveto_psf_cube=None,verbose=False):
 	'''
 	UPDATE DOCUMENTATION!
 	Point Spread Function subtraction for an entire MIRI MRS cube.
-
-	The results is very sensitive to the SNR_percentile across different subbands.
 
 	Parameters
 	----------
@@ -400,7 +400,7 @@ def subtract_psf_cube(fn,subband,mask_method,mask_par,psf_filename = None,aper_c
 			APERTURE
 			--------
 
-			This method places an aperture of 2*FWHM at the coordinates specified, and uses that as a mask.
+			(Much better) This method places an aperture of 2*FWHM at the coordinates specified, and uses that as a mask.
 	
 	mask_par : float for mask_method=='SNR' and CircularAperture for mask_method=='APERTURE'.
 		Object used to mask the channel map before centroiding. 
@@ -438,21 +438,29 @@ def subtract_psf_cube(fn,subband,mask_method,mask_par,psf_filename = None,aper_c
 	scaling_arr = []
 
 	fwhm_residual = []
+	fwhm_std = []
 	fwhm_bfe_residual = []
+	residual_channels = []
+	fwhm_bfe_std = []
 	bfe_residual = []
+	bfe_std = []
 	shp = np.shape(psfsub_cube[0])
 
 	base_factor = 1
 
-
-	psf_cube,x_offset_arr,y_offset_arr,scaling_arr = generate_psf_cube(fn,subband,mask_method,mask_par,aper_coords,wcs,saveto_psf_gen,saveto_psf_cube,base_factor)
+	#If the psfcube already exists, no need to regenerate it.
+	if not (os.path.exists(saveto_psf_gen) and os.path.exists(saveto_psf_cube)):
+		psf_cube,x_offset_arr,y_offset_arr,scaling_arr,mask = generate_psf_cube(fn,subband,mask_method,mask_par,aper_coords,wcs,saveto_psf_gen,saveto_psf_cube,base_factor)
+	else:
+		x_offset_arr,y_offset_arr,scaling_arr,mask = get_cube_offsets_scaling(um,data_cube,unc_cube,subband,mask_method,base_factor,aper_coords,wcs,saveto_psf_gen)
+		psf_cube = fits.open(saveto_psf_cube)[1].data
 
 	for channel, (chan_map, unc_map) in enumerate(zip(data_cube,unc_cube)):	
-		print('Channel %d of %d'%(channel,len(data_cube)))
+		if verbose:
+			print('Channel %d of %d'%(channel,len(data_cube)))
 		psf_map = psf_cube[channel]
 		psfsub_cube[channel] = chan_map - psf_map
-
-		residual = np.abs(psfsub_cube[channel]/psf_map) #residual is subtracted relative to scaled psf
+		
 		fwhm = (base_factor+bfe_factor)*get_JWST_PSF(um[channel])
 		RA, Dec = aper_coords
 		aper = define_circular_aperture(RA,Dec,fwhm)
@@ -464,10 +472,19 @@ def subtract_psf_cube(fn,subband,mask_method,mask_par,psf_filename = None,aper_c
 
 		bfe_mask = aper_mask_bfe - aper_mask
 
-		fwhm_residual.append(np.nansum(residual[aper_mask==1]))
-		fwhm_bfe_residual.append(np.nansum(residual[aper_mask_bfe==1]))
-		bfe_residual.append(np.nansum(residual[bfe_mask==1]))
+		#Only save the residuals for continuum channels. Line channels arbitrarily increase it, and modifies the statistics.
 
+		if mask[channel] == True:
+			residual_channels += [channel]*len(psfsub_cube[channel][aper_mask_bfe==1]/psf_map[aper_mask_bfe==1])
+			#Residual with the fwhm only.	
+			fwhm_residual += list(psfsub_cube[channel][aper_mask_bfe==1]/psf_map[aper_mask_bfe==1])
+
+			#Residual with the fwhm and the bfe factor.
+			fwhm_bfe_residual += list(psfsub_cube[channel][aper_mask_bfe==1]/psf_map[aper_mask_bfe==1])
+
+			#Residual for the bfe area only.
+			bfe_residual+= list(psfsub_cube[channel][aper_mask_bfe==1]/psf_map[aper_mask_bfe==1])
+		
 		if mask_psfsub:
 			psfsub_cube[channel][aper_mask_bfe==1] = np.nan
 
@@ -491,6 +508,40 @@ def subtract_psf_cube(fn,subband,mask_method,mask_par,psf_filename = None,aper_c
 			plt.colorbar(location='bottom',fraction=0.046)
 			plt.show()
 
+
+	plt.scatter(residual_channels,fwhm_residual,s=0.1)
+	plt.show()
+
+
+	#Turn this into a plot where you show the average residual per subchannel.
+	#This does not need to be anything fancy. Take the median from these arrays, with median scatters.
+	if (0):
+		plt.close()
+		plt.figure(figsize = (10,12))
+		plt.suptitle(subband)
+		plt.subplot(311)
+		x_test = range(len(fwhm_bfe_residual))
+		plt.scatter(x_test,fwhm_bfe_residual,label='fwhm bfe residual',s=1)
+		plt.errorbar(x_test,fwhm_bfe_residual,yerr=fwhm_bfe_std,linestyle='None',ecolor='black')
+
+		plt.legend()
+
+		plt.subplot(312)
+		x_test = range(len(fwhm_residual))
+		plt.scatter(x_test,fwhm_residual,label='fwhm residual',s=1)
+		plt.errorbar(x_test,fwhm_residual,yerr=fwhm_std,linestyle='None',ecolor='black')
+
+		plt.legend()
+
+		plt.subplot(313)
+		x_test = range(len(bfe_residual))
+		plt.scatter(x_test,bfe_residual,label='bfe residual',s=1)
+		plt.errorbar(x_test,bfe_residual,yerr=bfe_std,linestyle='None',ecolor='black')
+
+		plt.legend()
+
+		plt.show()
+
 	if saveto:
 		#This should be the psf_subtracted cube.
 		hdu = fits.open(fn).copy()
@@ -504,9 +555,8 @@ def subtract_psf_cube(fn,subband,mask_method,mask_par,psf_filename = None,aper_c
 			plt.plot(um,bfe_residual,label='bfe only')
 			plt.legend()
 			plt.show()
-			
 
-	return psfsub_cube,x_offset_arr,y_offset_arr,scaling_arr
+	return psfsub_cube,x_offset_arr,y_offset_arr,scaling_arr,fwhm_residual,fwhm_bfe_residual,bfe_residual
 
 def get_pixel_scale(subband):
 	'''

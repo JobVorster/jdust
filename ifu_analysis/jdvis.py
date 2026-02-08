@@ -5,7 +5,7 @@ from photutils.aperture import SkyCircularAperture,CircularAperture
 from astropy.visualization.wcsaxes import WCSAxes,add_beam
 from astropy.wcs import WCS
 import astropy.units as u
-
+from ifu_analysis.jdutils import define_circular_aperture
 
 ################################
 # Constants					   #
@@ -191,9 +191,9 @@ def generate_image_grid(shp,figsize,wcs_arr=None):
 
 def annotate_imshow(ax,hdr,hide_ticks=False,do_minor_ticks=False,
 	beam_fwhm=None,RA_format = 'hh:mm:ss.ss',Dec_format = 'dd:mm:ss.s',
-	source_name=None,wavelength=None,img_type=None,fontdict={'va': 'center','ha': 'left','fontsize':12,'color':'red'},
+	source_name=None,wavelength=None,img_type=None,fontdict={'va': 'center','ha': 'left','fontsize':12,'color':'white'},
 	linear_scale = None, distance = None,
-	add_colorbar=False,colorbar_label=None,dogrid=False,star_pos = None):
+	add_colorbar=False,colorbar_label=None,dogrid=False,star_pos = None,cbar_fraction = 0.05):
 	'''
 	INSERT DOCSTRING HERE!!
 	'''
@@ -243,7 +243,7 @@ def annotate_imshow(ax,hdr,hide_ticks=False,do_minor_ticks=False,
 
 	#Beam fwhm must be in arcsec.
 	if beam_fwhm:
-		add_beam(ax,major=beam_fwhm*u.arcsec,minor=beam_fwhm*u.arcsec,angle=0,fc=None,ec='red',fill=None)
+		add_beam(ax,major=beam_fwhm*u.arcsec,minor=beam_fwhm*u.arcsec,angle=0,fc=None,ec=fontdict['color'],fill=None)
 
 	#Annotation of title etc.
 	if source_name or wavelength or img_type:
@@ -295,15 +295,15 @@ def annotate_imshow(ax,hdr,hide_ticks=False,do_minor_ticks=False,
 			xplot = [xorigin,xorigin+npixels]
 			yplot = [yorigin,yorigin]
 
-			ax.plot(xplot,yplot-yextent*0.04,color='red',linewidth=2.5)
+			ax.plot(xplot,yplot-yextent*0.04,color=fontdict['color'],linewidth=2.5)
 			xtext = np.mean(xplot)
 			ytext = yorigin
-			ax.text(xtext,ytext,lin_str,color='red',va='center',ha='center',fontsize = 10)
+			ax.text(xtext,ytext,lin_str,color=fontdict['color'],va='center',ha='center',fontsize = 10)
 
 	if add_colorbar:
 		cbar_tick_fontsize = 10
 		im = ax.get_images()[-1]
-		cbar = plt.colorbar(im, ax=ax,location='top',fraction=0.046,pad = 0)
+		cbar = plt.colorbar(im, ax=ax,location='top',fraction=cbar_fraction,pad = 0)
 		cbar.ax.tick_params(labelsize=cbar_tick_fontsize)
 		if colorbar_label:
 			cbar.set_label(colorbar_label,fontsize = 12)
