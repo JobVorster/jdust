@@ -274,7 +274,7 @@ fn_sillicates = "adwin_silicates.csv"
 
 
 source_name = 'L1448MM1'
-do_sigma_clip = True
+do_sigma_clip = False
 do_extinction_correction = True
 N_sigma_clip = 3
 
@@ -411,7 +411,8 @@ if os.path.isfile(aperture_filename):
 			inds = np.where(aper_mask ==1)
 			extinction_arr.append(np.nanmean(ext[inds]))
 if do_extinction_correction:
-	print(extinction_arr)	
+	for aperture, av in zip(aper_names, extinction_arr):
+		print('Aperture: %s, Av: %.2f mag'%(aperture,av))
 
 
 for fitoption in fitoptions:
@@ -449,8 +450,11 @@ for fitoption in fitoptions:
 			um_psfmodel,flux_psfmodel,unc_psfmodel = [sp_psfmodel[x] for x in ['um', 'flux', 'flux_unc']]
 			um_psfsub,flux_psfsub,unc_psfsub = [sp_psfsub[x] for x in ['um', 'flux', 'flux_unc']]
 
+
+
 			#Sigma clipping.
 			#TODO: Do the sigma clipping at the stitching to have correct uncertainties.
+			#TODO: At stiching change that relative uncertainties are constant with stitching.
 			if do_sigma_clip:
 				inds_base = np.where(flux_base > N_sigma_clip*unc_base)
 				inds_psfmodel = np.where(flux_psfmodel > N_sigma_clip*unc_psfmodel)
@@ -469,6 +473,7 @@ for fitoption in fitoptions:
 					raise ValueError('Please specify which data would be used (BASE/PSFSUB).')
 					exit()
 			else:
+				print('No sigma clipping')
 				if which_data =='NOSUB':
 					u_use = um_base
 					f_use = flux_base
@@ -480,6 +485,9 @@ for fitoption in fitoptions:
 				else:
 					raise ValueError('Please specify which data would be used (BASE/PSFSUB).')
 					exit()
+
+			plt.scatter(u_use,f_use,label='Original',s=0.2,zorder=1,color='red')
+			plt.fill_between(u_use,y1=f_use-unc_use,y2=f_use+unc_use,color='red',alpha=0.3,zorder=0)
 
 			if do_extinction_correction:
 				ext_app = extinction_arr[i_ap]
@@ -500,6 +508,16 @@ for fitoption in fitoptions:
 			#Convert from Jy to W cm-2
 			f_rad = convert_flux_wl(u_use,f_use)
 			unc_rad = convert_flux_wl(u_use,unc_use)
+
+			plt.scatter(u_use,f_use,label='De-reddened',s=0.2,zorder=1,color='green')
+			plt.fill_between(u_use,y1=f_use-unc_use,y2=f_use+unc_use,color='green',alpha=0.3,zorder=0)
+			plt.yscale('log')
+			plt.xlabel(r'Wavelength ($\mu$m)')
+			plt.ylabel('Flux Density (Jy)')
+			plt.title('%s, Aperture: %s, Option: %s'%(source_name,aperture,which_data))
+			plt.legend()
+			plt.show()
+	
 
 			#The MIRI MRS detector is bad above 27.5 um, flag all data above it.
 			um_cut = 27.5

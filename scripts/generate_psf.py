@@ -39,15 +39,14 @@ from astropy.wcs import WCS
 
 #Make this a loop through all subbands, with the right SNR_percentile.
 
-#['1A','1B','1C','2A','2B']
-subband_arr = ['2C','3A','3B','3C','4A','4B','4C'] 
-
-#['ch1-short','ch1-medium','ch1-long','ch2-short','ch2-medium']
-fn_band_arr = ['ch2-long','ch3-short','ch3-medium','ch3-long','ch4-short','ch4-medium','ch4-long']
+#['1A','1B','1C','2A','2B','2C',]
+subband_arr = ['3A','3B','3C','4A','4B','4C']
+#['ch1-short','ch1-medium','ch1-long','ch2-short','ch2-medium','ch2-long',]
+fn_band_arr = ['ch3-short','ch3-medium','ch3-long','ch4-short','ch4-medium','ch4-long']
 
 #Single subband
-subband_arr = ['4C']
-fn_band_arr = ['ch4-long']
+subband_arr = ['3A','3B']
+fn_band_arr = ['ch3-short','ch3-medium']
 
 fn_arr = ['/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_post_processing/L1448-mm_%s_s3d_LSRcorr_stripecorr.fits'%(x) for x in fn_band_arr]
 cont_fn_arr = ['/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_post_processing/L1448-mm_%s_cont.fits'%(x) for x in fn_band_arr]
@@ -69,6 +68,8 @@ bfe_factor = 0.35
 base_factor = 1
 mask_ratio = 0.5
 
+boxplot_dictionary = {}
+
 for filename,cont_filename,subband,SNR_percentile in zip(fn_arr,cont_fn_arr,subband_arr,SNR_percentile_arr):
 	
 	#Fix this filename.
@@ -87,33 +88,20 @@ for filename,cont_filename,subband,SNR_percentile in zip(fn_arr,cont_fn_arr,subb
 	wcs = wcs.dropaxis(2)
 
 
-	psfsub_cube,x_offset_arr,y_offset_arr,scaling_arr = subtract_psf_cube(fn=filename,subband=subband,
+	psfsub_cube,x_offset_arr,y_offset_arr,scaling_arr,fwhm_residual,fwhm_bfe_residual,bfe_residual = subtract_psf_cube(fn=filename,subband=subband,
 		mask_method=mask_method,mask_par=mask_par,aper_coords = aper_coords,wcs = wcs,
 		saveto=saveto,mask_psfsub=mask_psfsub,bfe_factor=bfe_factor,
-		saveto_psf_gen=saveto_psf_gen,saveto_psf_cube=saveto_psf_cube)
+		saveto_psf_gen=saveto_psf_gen,saveto_psf_cube=saveto_psf_cube,verbose=True)
 
-#	Current options.
-#	(fn,subband,mask_method,mask_par,psf_filename = None,
-#		aper_coords = None,wcs = None,saveto=None,mask_psfsub=False,
-#		bfe_factor=0,flagged_channels = None,saveto_psf_gen=None,saveto_psf_cube=None)
+	plt.close()
+	plt.hist(fwhm_residual,bins=np.linspace(-5,5,1000))
+	plt.show()
 
+	boxplot_dictionary['%s:FWHM'%(subband)] = fwhm_residual
+	boxplot_dictionary['%s:FWHM_BFE'%(subband)] = fwhm_bfe_residual
+	boxplot_dictionary['%s:BFE'%(subband)] = bfe_residual
 
-
-	#I still need to check if the psfsub works as it should.
-	if doplot:
-		plt.figure(figsize = (16,5))
-		plt.subplot(131)
-		plt.plot(um,x_offset_arr)
-		plt.xlabel('Wavelength (um)')
-		plt.ylabel('X Offset')
-		plt.subplot(132)
-		plt.plot(um,y_offset_arr)
-		plt.xlabel('Wavelength (um)')
-		plt.ylabel('Y Offset')
-		plt.subplot(133)
-		plt.plot(um,scaling_arr)
-		plt.xlabel('Wavelength (um)')
-		plt.ylabel('Scaling')
-		plt.show()
-		
-	
+bplot_2D = [boxplot_dictionary['%s:FWHM'%(x)] for x in subband_arr]
+print(np.shape(bplot_2D))
+plt.boxplot(bplot_2D,showfliers=False,tick_labels=subband_arr)
+plt.show()

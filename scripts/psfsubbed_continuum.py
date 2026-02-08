@@ -18,8 +18,8 @@ sub_names =['short','medium','long']
 subchannel_arr =  ['ch1-%s'%(x) for x in sub_names]+['ch2-%s'%(x) for x in sub_names]+['ch3-%s'%(x) for x in sub_names] +['ch4-%s'%(x) for x in sub_names]
 
 
-subchannel_arr = ['ch4-long']
-output_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_post_processing/PSF_Subtraction/'
+#subchannel_arr = ['ch4-long']
+output_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/continuum_RADEC/'
 saveto_plots = None
 verbose =False
 do_cont_cube = True

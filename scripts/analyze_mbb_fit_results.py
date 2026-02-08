@@ -9,6 +9,7 @@ from astropy.coordinates import SkyCoord
 pd.set_option('display.max_columns', None)
 
 source_name = 'L1448MM1'
+d = 293 #pc
 extinction_correction = True
 
 
@@ -149,13 +150,12 @@ for aperture in aper_names:
 		formatted = f'{val:<{COL_WIDTH}}' if isinstance(val, str) else f'{val:<{COL_WIDTH}.{SIG_FIGS}{FORMATTER}}'
 		print_str += formatted
 		
+
 		# Add color to entire row if this row is in top 3 lowest chi2
 		if i in lowest_3:
 			print_str =  BOLD + colors[i] + print_str + RESET
-		
 		print(print_str)
-
-
+			
 	#print(df_mbbresults[['Model','BB1T','BB1S','BB2T','BB2S','chi2_reduced']])
 
 #Plot best fit T1 and S1
@@ -185,15 +185,17 @@ for aperture in aper_names:
 		aper_ind = np.where(aper_names==aperture)[0][0]
 
 		angular_sep = skycoord_sep_arr[aper_ind].value #arcsec
-
 		aperture_plots['%s:Angular_Sep'%(aperture)] = angular_sep
 		aperture_plots['%s:Temp1'%(aperture)] = df_mbbresults['BB1T'].values[ind_select]
 		aperture_plots['%s:Scale1'%(aperture)] = df_mbbresults['BB1S'].values[ind_select]
+		aperture_plots['%s:SO'%(aperture)] = df_mbbresults['Sil Oliv'].values[ind_select]
+		aperture_plots['%s:SP'%(aperture)] = df_mbbresults['Sil Pyro'].values[ind_select]
 
 
-plt.figure(figsize = (10,4))
+plt.figure(figsize = (10,10))
 for ap_series in ['A','B','C']:
-	sep_arr = []
+	
+	#Grab dictionary keys.
 	sep_cols = []
 	for col in aperture_plots.keys():
 		if ('Angular_Sep' in col) and (col[0] == ap_series):
@@ -209,6 +211,18 @@ for ap_series in ['A','B','C']:
 		if ('Scale1' in col) and (col[0] == ap_series):
 			scale_cols.append(col)
 
+	SO_cols = []
+	for col in aperture_plots.keys():
+		if ('SO' in col) and (col[0] == ap_series):
+			SO_cols.append(col)
+
+	SP_cols = []
+	for col in aperture_plots.keys():
+		if ('SP' in col) and (col[0] == ap_series):
+			SP_cols.append(col)
+
+	#Create the plot arrays.
+	sep_arr = []
 	for col in sep_cols:
 		sep_arr.append(aperture_plots[col])
 
@@ -220,21 +234,122 @@ for ap_series in ['A','B','C']:
 	for col in scale_cols:
 		scale_arr.append(aperture_plots[col])
 
-	
-	plt.subplot(121)
-	plt.scatter(sep_arr,t_arr,label = ap_series)
-	plt.xlabel('Angular Separation (arcsec)')
-	plt.ylabel('Hot Blackbody Temperature (K)')
-	plt.subplot(122)
-	plt.scatter(sep_arr,scale_arr,label = ap_series)
-	plt.xlabel('Angular Separation (arcsec)')
-	plt.ylabel('Hot Blackbody Scale (aperture solid angle)')
-plt.subplot(121)
-plt.legend()
-plt.subplot(122)
-plt.legend()
-plt.show()
+	SO_arr = []
+	for col in SO_cols:
+		SO_arr.append(aperture_plots[col])
 
+	SP_arr = []
+	for col in SP_cols:
+		SP_arr.append(aperture_plots[col])
+
+	sep_arr = np.array(sep_arr)
+	sep_arr*= d
+	do_mass = True
+	if do_mass:
+		SO_arr = np.array(SO_arr)
+		SP_arr = np.array(SP_arr)
+		aperture_radius = 0.7 #arcsec
+		aperture_radius *= d #au
+		aperture_area = np.pi*aperture_radius**2 #au^2
+		aperture_area *= 1.496e+13**2 #cm^2
+		SO_arr *= aperture_area #g
+		SO_arr *= 5.267e-31 #Jupiter masses
+
+		SP_arr *= aperture_area #g
+		SP_arr *= 5.267e-31 #Jupter masses
+
+
+	plt.subplot(221)
+	plt.plot(sep_arr,t_arr,label = ap_series,marker='o',markeredgecolor='black')
+	plt.xlabel('Distance from Star+Disk (au, d=293 pc)')
+	plt.ylabel('Hot Blackbody Temperature (K)')
+	plt.subplot(222)
+	plt.plot(sep_arr,scale_arr,label = ap_series,marker='o',markeredgecolor='black')
+	plt.xlabel('Distance from Star+Disk (au, d=293 pc)')
+	plt.ylabel('Hot Blackbody Scale (aperture solid angle)')
+	plt.subplot(223)
+	plt.plot(sep_arr,SO_arr,label = ap_series,marker='o',markeredgecolor='black')
+	plt.xlabel('Distance from Star+Disk (au, d=293 pc)')
+	if not do_mass:
+		plt.ylabel('Olivine surface density (g cm-2)')
+	else:
+		plt.ylabel(r'Olivine Mass (M$_{\rm Jup}$)')
+	plt.subplot(224)
+	plt.plot(sep_arr,SP_arr,label = ap_series,marker='o',markeredgecolor='black')
+	plt.xlabel('Distance from Star+Disk (au, d=293 pc)')
+	if not do_mass:
+		plt.ylabel('Pyroxene surface density (g cm-2)')
+	else:
+		plt.ylabel(r'Pyroxene Mass (M$_{\rm Jup}$)')
+plt.subplot(221)
+plt.legend()
+plt.subplot(222)
+plt.legend()
+plt.subplot(223)
+plt.legend()
+plt.subplot(224)
+plt.legend()
+if not do_mass:
+	plt.savefig('Fit_overview.png',dpi=200,bbox_inches='tight')
+else:
+	plt.savefig('Fit_overview_mass.png',dpi=200,bbox_inches='tight')
+for ap_series in ['A','B','C']:
+	#Grab dictionary keys.
+	sep_cols = []
+	for col in aperture_plots.keys():
+		if ('Angular_Sep' in col) and (col[0] == ap_series):
+			sep_cols.append(col)
+
+	SO_cols = []
+	for col in aperture_plots.keys():
+		if ('SO' in col) and (col[0] == ap_series):
+			SO_cols.append(col)
+
+	SP_cols = []
+	for col in aperture_plots.keys():
+		if ('SP' in col) and (col[0] == ap_series):
+			SP_cols.append(col)
+
+	#Create the plot arrays.
+	sep_arr = []
+	for col in sep_cols:
+		sep_arr.append(aperture_plots[col])
+
+	SO_arr = []
+	for col in SO_cols:
+		SO_arr.append(aperture_plots[col])
+
+	SP_arr = []
+	for col in scale_cols:
+		SP_arr.append(aperture_plots[col])
+	print(ap_series)
+
+
+	sep_arr = np.array(sep_arr)
+	SO_arr = np.array(SO_arr)
+	SP_arr = np.array(SP_arr)
+
+	print(SO_arr)
+	print(SP_arr)
+
+	SO_arr[np.isnan(SO_arr)] = 0
+	SP_arr[np.isnan(SP_arr)] = 0
+	SPO_arr = SO_arr + SP_arr #g cm-2
+
+	sep_arr*= d
+	aperture_radius = 0.7 #arcsec
+	aperture_radius *= d #au
+	aperture_area = np.pi*aperture_radius**2 #au^2
+	aperture_area *= 1.496e+13**2 #cm^2
+	mass_arr = SPO_arr*aperture_area #g
+	mass_arr *= 1.67442e-28 #earth masses
+
+
+	plt.figure(figsize = (7,7))
+	plt.scatter(sep_arr,mass_arr,label = ap_series)
+	plt.xlabel('Distance from Star+Disk (au, d=293 pc)')
+	plt.ylabel(r'Dust mass (M$_\oplus$)')
+plt.show()
 
 
 

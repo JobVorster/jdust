@@ -31,11 +31,11 @@ from scipy.optimize import curve_fit
 				#RESULTS: Assess if there is contamination from the point source.
 				#RESULTS: S I, Fe II, CO2, Water, and continuum.
 			#RESULTS: NIRSpec CO maps.
-		#RESULTS: Blackbody fitting+temperature.
-			#RESULTS: Apertures for the interesting regions.
-			#RESULTS: Distance + angle dependence.
-		#DISCUSSION: Is the continuum scattering? One can look at the HI line maps. 
-		#DISCUSSION: Mass with assumed geometry (spherical vs cylindrical) and kappa (opacity - different models)
+		#RESULTS: Blackbody fitting+temperature -- done.
+			#RESULTS: Apertures for the interesting regions -- done.
+			#RESULTS: Distance + angle dependence -- done.
+		#DISCUSSION: Is the continuum scattering? One can look at the HI line maps - yes and we can moddel it.
+		#DISCUSSION: Mass with assumed geometry (spherical vs cylindrical) and kappa (opacity - different models) -- done/
 		#DISCUSSION: CO2: Can you lift icy dust? Or does the wind sweeping necessarily sublimate the ice?
 		#DISCUSSION: If the ice on the dust is *necessarily* sublimated by the wind --> comes from envelope.
 		#DISCUSSION: Would stellar light necessarily sublimate ice on dust grains during wind lift?
@@ -43,7 +43,7 @@ from scipy.optimize import curve_fit
 		#DISCUSSION: Outflow rate from velocities (which velocities - e.g. low velocity H2?)
 			#Ratio of dust swept up compared to gas -- order of gas to dust ratio.
 			#Comparison with dusty disk winds - MHD and photoevaporative (also EAS Talk about dust ejection)
-		#DISCUSSION: What is the origin of this dust - disk, envelope, ISM (can it survive the jets?) 
+		#DISCUSSION: What is the origin of this dust - disk, envelope, ISM (can it survive the jets?) -- this can be possibly inferred by minerology.
 		#DISCUSSION: Compare to HH211 and BHR71).
 	#FINAL:Get dust masses per aperture, and get the dust to gas outflow rates.
 

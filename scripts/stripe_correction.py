@@ -13,14 +13,14 @@ from tqdm import tqdm
 sub_names =['short','medium','long']
 subchannel_arr =  ['ch1-%s'%(x) for x in sub_names]+['ch2-%s'%(x) for x in sub_names]+['ch3-%s'%(x) for x in sub_names] +['ch4-%s'%(x) for x in sub_names]
 
-subchannel_arr = ['ch4-long']
+#subchannel_arr = ['ch4-long']
 
-output_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_post_processing/'
+output_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/continuum_RADEC/'
 saveto_plots = output_foldername
 
 for subchannel in subchannel_arr:
 	print('Doing subchannel %s'%(subchannel))
-	hdu_fn = '/home/vorsteja/Documents/JOYS/JWST_cubes/L1448MM1_IFUAlign/L1448-mm_%s_s3d_LSRcorr.fits'%(subchannel)
+	hdu_fn = '/home/vorsteja/Documents/JOYS/JWST_cubes/L1448MM1/L1448-mm_%s_s3d_LSRcorr.fits'%(subchannel)
 	
 	output_data = output_foldername + 'L1448-mm_%s_s3d_LSRcorr_stripecorr.fits'%(subchannel)
 	output_bkg = output_foldername + 'L1448-mm_%s_stripebkg.fits'%(subchannel)

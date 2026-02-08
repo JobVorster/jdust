@@ -1,0 +1,832 @@
+import os
+from spectres import spectres
+import numpy as np 
+import sys
+import matplotlib.pyplot as plt 
+import pandas as pd
+import json
+from pybaselines import Baseline
+import emcee
+from ifu_analysis.jdspextract import load_spectra,merge_subcubes,read_aperture_ini
+from ifu_analysis.jdfitting import read_optool,fit_model,blackbody,prepare_spectra_for_fit,get_continuum_mask,results_to_terminal_str,grab_p0_bounds,calculate_goodness_of_fit
+from multiprocessing import Pool
+import corner
+
+OKBLUE = '\033[94m'
+OKCYAN = '\033[96m'
+OKGREEN = '\033[92m'
+WARNING = '\033[93m'
+FAIL = '\033[91m'
+ENDC = '\033[0m'
+BOLD = '\033[1m'
+UNDERLINE = '\033[4m'
+
+def regrid_kappas(wave,kappa_arr,new_wave):
+	Nsizes, Nspecies, _ = np.shape(kappa_arr)
+
+	kregrid_arr = np.zeros((Nsizes,Nspecies,len(new_wave)))
+	for i in range(Nsizes):
+		for j in range(Nspecies):
+			kregrid = spectres(new_wave,wave,kappa_arr[i][j])
+			kregrid_arr[i][j] = kregrid
+	return kregrid_arr
+
+def cavity_model(wav,temp,scaling,temp2,scaling2,surface_density,Jv_T,Jv_Scale):
+	#Model CM
+	#Regrid to wav with spectres
+	kabs = spectres(wav,wave,kappa_abs)
+	ksca = spectres(wav,wave,kappa_scat)
+
+	F_source = blackbody(wav,Jv_T,Jv_Scale)
+
+	model = (source_function(wav,temp,scaling,kabs,ksca,F_source)+source_function(wav,temp2,scaling2,kabs,ksca,F_source)) * np.exp(-surface_density*(kabs+ksca))
+	return model
+
+def weighted_kappa(mfrac_arr,kappa_arr):
+	kappa_nu = np.zeros(np.shape(kappa_arr))[0][0] #kappa as a function of wavelength.
+	Nsizes, Nspecies = np.shape(mfrac_arr)
+	for i in range(Nsizes):
+		for j in range(Nspecies):
+			kappa_nu += mfrac_arr[i][j]/np.sum(mfrac_arr.flatten())*kappa_arr[i][j]
+	return kappa_nu
+
+def cavity_model_mfrac(wav,temp,scaling,temp2,scaling2,surface_density,Jv_Scale,mfrac_arr,kabs_arr,ksca_arr):
+	#Model CM
+	
+	#Before optimisation, one has to regrid the kappas to the relevant grid.
+	#kappa_arr: Nsize x Nspecies x Nwave array of opacities.
+	#mfrac_arr: Nsize x Nspecies array of mass fractions.
+
+	kabs = weighted_kappa(mfrac_arr,kabs_arr)
+	ksca = weighted_kappa(mfrac_arr,ksca_arr)
+
+	# Fix scattering temperature to 5000 K (not a free parameter)
+	Jv_T = 5000.0
+	F_source = blackbody(wav,Jv_T,Jv_Scale)
+
+	model = (source_function(wav,temp,scaling,kabs,ksca,F_source)+source_function(wav,temp2,scaling2,kabs,ksca,F_source)) * np.exp(-surface_density*(kabs+ksca))
+	return model
+
+def source_function(wav,temp,scaling,kabs,ksca,F_source):
+	return (kabs*blackbody(wav,temp,scaling) + ksca*F_source)/(kabs+ksca)
+
+
+############################################################
+#														   #	
+#	 USER DEFINED PARAMETERS SECTION 1/2				   #
+#														   #
+############################################################
+
+distance_dict = {}
+distance_dict['L1448MM1'] = 293 #pc
+distance_dict['BHR71'] = 176 #pc
+
+COL_WIDTH = 20#for terminal printing
+
+model_str = 'CM' #Options: CM, CMWIND, CM_ANI 
+source_name = 'L1448MM1' #Options: L1448MM1, BHR71
+kp5_filename = "/home/vorsteja/Documents/JOYS/Collaborator_Scripts/Sam_Extinction/KP5_benchmark_RNAAS.csv"
+opacity_foldername = '/home/vorsteja/Documents/JOYS/JDust/optool_opacities/'
+
+grain_species = ['olmg50','pyrmg70'] #'qua','for','ens'
+Nspecies = len(grain_species)
+grain_sizes = [0.1,1.5,6]
+Nsizes = len(grain_sizes)
+
+#Wavelength to fit.
+fit_wavelengths = [[4.7,5.67],[7.44,14.66],[16,27.5]]
+
+#Wavelength ranges to calculate reduced chi2
+chi_ranges = [[4.93,5.6],[7.7,8],[8.5,11.5],[12,14],[15.7,17],[19,20.5]]
+
+############################################################
+#														   #	
+#	 MCMC PARAMETERS									   #
+#														   #
+############################################################
+
+def load_initial_guess_from_csv(csv_foldername, source_name, aperture, n_samples=1000):
+	"""
+	Load initial guess from previous optimization results.
+	Takes the average of the last n_samples entries.
+	
+	Parameters:
+	-----------
+	csv_foldername : str
+		Path to folder containing previous fitting results
+	source_name : str
+		Source name (e.g., 'L1448MM1')
+	aperture : str
+		Aperture name (e.g., 'A1', 'A2', etc.)
+	n_samples : int
+		Number of last samples to average (default: 1000)
+	
+	Returns:
+	--------
+	p0_physical : list
+		Initial guess for physical parameters [temp, scaling, temp2, scaling2, surface_density, Jv_Scale]
+	p0_mfrac : list
+		Initial guess for mass fractions (flattened)
+	"""
+	csv_filename = os.path.join(csv_foldername, f'fitting_results_{source_name}_{aperture}.csv')
+	
+	if not os.path.isfile(csv_filename):
+		print(f"Warning: Could not find {csv_filename}")
+		print(f"Using default initial guess instead")
+		return None, None
+	
+	try:
+		# Load the CSV
+		df = pd.read_csv(csv_filename)
+		
+		# Get last n_samples
+		df_tail = df.tail(n_samples)
+		
+		# Extract physical parameters (note: old CSV has Jv_T, we need to skip it)
+		# Expected columns: ID, chi2_red, temp, scaling, temp2, scaling2, surface_density, Jv_T, Jv_Scale, mfracs...
+		
+		if 'Jv_T' in df_tail.columns:
+			# Old format with Jv_T - we skip it
+			p0_physical = [
+				df_tail['temp'].mean(),
+				df_tail['scaling'].mean(),
+				df_tail['temp2'].mean(),
+				df_tail['scaling2'].mean(),
+				df_tail['surface_density'].mean(),
+				df_tail['Jv_Scale'].mean()
+			]
+		else:
+			# New format without Jv_T
+			p0_physical = [
+				df_tail['temp'].mean(),
+				df_tail['scaling'].mean(),
+				df_tail['temp2'].mean(),
+				df_tail['scaling2'].mean(),
+				df_tail['surface_density'].mean(),
+				df_tail['Jv_Scale'].mean()
+			]
+		
+		# Extract mass fractions
+		# Find columns that contain grain species and sizes
+		mfrac_cols = [col for col in df_tail.columns if any(species in col for species in grain_species)]
+		
+		p0_mfrac = []
+		for col in mfrac_cols:
+			p0_mfrac.append(df_tail[col].mean())
+		
+		print(f"Loaded initial guess from {csv_filename}")
+		print(f"  Averaged last {n_samples} samples")
+		print(f"  temp = {p0_physical[0]:.2f} K")
+		print(f"  scaling = {p0_physical[1]:.2e}")
+		print(f"  temp2 = {p0_physical[2]:.2f} K")
+		print(f"  scaling2 = {p0_physical[3]:.2e}")
+		print(f"  surface_density = {p0_physical[4]:.2e}")
+		print(f"  Jv_Scale = {p0_physical[5]:.2e}")
+		
+		return p0_physical, p0_mfrac
+		
+	except Exception as e:
+		print(f"Error loading initial guess from {csv_filename}: {e}")
+		print(f"Using default initial guess instead")
+		return None, None
+
+############################################################
+#														   #	
+#	 MCMC PARAMETERS									   #
+#														   #
+############################################################
+
+# MCMC settings
+NWALKERS = 64  # Number of walkers (should be at least 2*ndim)
+NSTEPS = 500000  # Number of steps per walker
+NBURN = 100000  # Burn-in steps to discard
+THIN = 20  # Thinning factor (keep every Nth sample)
+USE_PARALLEL = True  # Use multiprocessing for speed
+NCORES = 8  # Number of cores to use if USE_PARALLEL=True
+
+# Initial guess settings
+USE_PREVIOUS_RESULTS = True  # Load initial guesses from previous optimization
+PREVIOUS_RESULTS_FOLDER = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/cavity_modelling/B2C/'
+N_SAMPLES_TO_AVERAGE = 1000  # Number of last samples to average for initial guess
+
+# Diagnostic plots
+PLOT_DURING_BURNIN = True  # Show progress plots during burn-in
+BURNIN_PLOTTING_STEPS = 10000
+SAVE_DIAGNOSTIC_PLOTS = True  # Save trace plots and corner plots
+
+############################################################
+#														   #	
+#	 USER DEFINED PARAMETERS SECTION 2/2				   #
+#														   #
+############################################################
+
+#Set initial guesses and bounds
+
+p0_dict = {}
+
+p0_T1 = 70
+p0_O1 = 1e-2
+p0_T2 = 400
+p0_O2 = 1e-7
+p0_T_star = 5000
+p0_O_star = 1e-9
+p0_SD_LOS = 1e-3
+p0_SD_WIND = 1e-7
+p0_FF = 0.5
+
+p0_dict['ALL:ALL:CMWIND'] = [p0_T1,p0_O1,p0_T2,p0_O2,p0_SD_LOS,p0_O_star,p0_SD_WIND]
+p0_dict['ALL:ALL:CM'] =  [p0_T1,p0_O1,p0_T2,p0_O2,p0_SD_LOS,p0_O_star]  # Removed p0_T_star
+p0_dict['ALL:ALL:CM_ANI'] =  [p0_T1,p0_T2,p0_FF,p0_SD_LOS]
+
+bounds_dict = {}
+
+uT_emit = 1000
+uO_emit = 0.1
+uSD = 0.2
+uT_star = 5001 #Fix the scattering temperature (its degenerate with the scaling).
+lT_star = 4999
+utheta = 180
+uFF = 0.5
+
+#For model CM
+##########################################################################
+bounds_dict['ALL:ALL:CM:T1'] = [0,uT_emit]
+bounds_dict['ALL:ALL:CM:O1'] = [0,uO_emit]
+bounds_dict['ALL:ALL:CM:SD_LOS'] = [0,uSD]
+# T_star is now fixed at 5000 K, removed from bounds
+
+#Bounds that are equal to other bounds.
+bounds_dict['ALL:ALL:CM:O_star'] = bounds_dict['ALL:ALL:CM:O1']
+bounds_dict['ALL:ALL:CM:T2'] = bounds_dict['ALL:ALL:CM:T1']
+bounds_dict['ALL:ALL:CM:O2'] = bounds_dict['ALL:ALL:CM:O1']
+
+############################################################
+#														   #	
+#	 INITIALIZE MODELS				 				   	   #
+#														   #
+############################################################
+
+if model_str == 'CM':
+	model = cavity_model
+	model_parameters = ['T1','O1','T2','O2','SD_LOS','O_star']  # Removed T_star
+else:
+	raise ValueError('Please choose a valid model. Exiting...')
+	exit()
+
+model_uncertainties = ['d%s'%(x) for x in model_parameters]
+
+############################################################
+#														   #	
+#	 INITIALIZE FOLDERNAMES AND APERTURES 				   #
+#														   #
+############################################################
+
+if source_name == 'L1448MM1':
+	input_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/spectra/extracted_paper/'
+	output_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/cavity_modelling/'	
+	aperture_filename = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/input-files/aperture-ini-%s.txt'%(source_name)
+
+	if os.path.isfile(aperture_filename):
+		aper_names,aper_sizes,coord_list = read_aperture_ini(aperture_filename)
+
+elif source_name == 'BHR71':
+	output_foldername = '/home/vorsteja/Documents/JOYS/JDust/BHR71_scripts_12122025/BHR71/output/'
+	fn_band_arr = ['ch1-short','ch1-medium','ch1-long','ch2-short','ch2-medium','ch2-long',
+				'ch3-short','ch3-medium','ch3-long','ch4-short','ch4-medium','ch4-long'] 
+	input_foldername = '/home/vorsteja/Documents/JOYS/JDust/BHR71_scripts_12122025/BHR71_unc/BHR71/spectra_werrors/circle/1.00_arcsec/spectra_sci/'
+	aper_names = ['b1','o5','b2', 'b3', 'b4','cr1']
+
+############################################################
+#														   #	
+#	 INITIALIZE OPACITIES				 				   #
+#														   #
+############################################################
+
+header,wave,kappa_abs,kappa_scat,g = read_optool(opacity_foldername + '%s_%.1fum.dat'%(grain_species[0],grain_sizes[0]))
+
+kabs_arr = np.zeros((len(grain_sizes),len(grain_species),len(wave)))
+ksca_arr = np.zeros((len(grain_sizes),len(grain_species),len(wave)))
+	
+for i,gsize in enumerate(grain_sizes):
+	for j,gspecies in enumerate(grain_species):
+		op_fn = opacity_foldername+ '%s_%.1fum.dat'%(gspecies,gsize)
+		header,wave,kappa_abs,kappa_scat,g = read_optool(op_fn)
+		
+		kabs_arr[i][j] = kappa_abs
+		ksca_arr[i][j] = kappa_scat
+
+############################################################
+#														   #	
+#	 EMCEE LOG PROBABILITY FUNCTIONS					   #
+#														   #
+############################################################
+
+# Global variables that will be set for each aperture
+# (needed because emcee passes only theta to log_probability)
+_fit_um = None
+_fit_flux = None
+_fit_unc = None
+_rkabs_arr = None
+_rksca_arr = None
+_bounds = None
+_Nsizes = Nsizes
+_Nspecies = Nspecies
+
+def log_prior(theta):
+	"""
+	Log prior probability.
+	Returns log probability if parameters are within bounds, -inf otherwise.
+	Uses log-uniform (Jeffreys) priors for scaling parameters.
+	
+	theta = [temp, scaling, temp2, scaling2, surface_density, Jv_Scale, mfrac_flat...]
+	"""
+	theta = np.asarray(theta)  # Ensure theta is a numpy array
+	
+	temp, scaling, temp2, scaling2, surface_density, Jv_Scale = theta[:6]
+	mfrac_flat = theta[6:]
+	
+	log_prob = 0.0
+	
+	# Uniform priors for temperatures
+	if not (_bounds['T1'][0] <= temp <= _bounds['T1'][1]):
+		return -np.inf
+	if not (_bounds['T2'][0] <= temp2 <= _bounds['T2'][1]):
+		return -np.inf
+	
+	# Log-uniform (Jeffreys) priors for scaling parameters
+	# P(x) ∝ 1/x for x in [min, max]
+	# log P(x) = -log(x) - log(log(max/min))
+	
+	if not (_bounds['O1'][0] <= scaling <= _bounds['O1'][1]):
+		return -np.inf
+	else:
+		# Jeffreys prior: favors log-uniform sampling
+		log_prob += -np.log(scaling)
+	
+	if not (_bounds['O2'][0] <= scaling2 <= _bounds['O2'][1]):
+		return -np.inf
+	else:
+		log_prob += -np.log(scaling2)
+	
+	if not (_bounds['O_star'][0] <= Jv_Scale <= _bounds['O_star'][1]):
+		return -np.inf
+	else:
+		log_prob += -np.log(Jv_Scale)
+	
+	# Uniform prior for surface density
+	if not (_bounds['SD_LOS'][0] <= surface_density <= _bounds['SD_LOS'][1]):
+		return -np.inf
+	
+	# Check that mass fractions are positive
+	if np.any(mfrac_flat < 0):
+		return -np.inf
+	
+	# Check that mass fractions are not unreasonably large
+	if np.any(mfrac_flat > 1.0):
+		return -np.inf
+	
+	return log_prob
+
+def log_likelihood(theta):
+	"""
+	Log likelihood = -0.5 * chi^2
+	
+	theta = [temp, scaling, temp2, scaling2, surface_density, Jv_Scale, mfrac_flat...]
+	"""
+	theta = np.asarray(theta)  # Ensure theta is a numpy array
+	
+	temp, scaling, temp2, scaling2, surface_density, Jv_Scale = theta[:6]
+	mfrac_flat = theta[6:]
+	mfrac_arr = mfrac_flat.reshape(_Nsizes, _Nspecies)
+	
+	# Normalize mass fractions
+	mfrac_arr = mfrac_arr / np.sum(mfrac_arr)
+	
+	# Calculate model (Jv_T is fixed at 5000 inside the function)
+	try:
+		model_eval = cavity_model_mfrac(_fit_um, temp, scaling, temp2, scaling2,
+										surface_density, Jv_Scale, mfrac_arr,
+										_rkabs_arr, _rksca_arr)
+	except:
+		# If model calculation fails, return very low probability
+		return -np.inf
+	
+	# Check for NaN or inf in model
+	if not np.all(np.isfinite(model_eval)):
+		return -np.inf
+	
+	# Calculate chi-squared
+	residual = _fit_flux - model_eval
+	chi2 = np.sum(residual**2 / _fit_unc**2)
+	
+	# Return log likelihood
+	return -0.5 * chi2
+
+def log_probability(theta):
+	"""
+	Log posterior probability = log prior + log likelihood
+	"""
+	lp = log_prior(theta)
+	if not np.isfinite(lp):
+		return -np.inf
+	
+	ll = log_likelihood(theta)
+	if not np.isfinite(ll):
+		return -np.inf
+	
+	return lp + ll
+
+############################################################
+#														   #	
+#	 HELPER FUNCTIONS FOR MCMC							   #
+#														   #
+############################################################
+
+def initialize_walkers(p0, nwalkers, ndim, bounds):
+	"""
+	Initialize walker positions around initial guess p0.
+	Uses small perturbations that respect bounds.
+	"""
+	pos = []
+	
+	# Scale of perturbations (relative to parameter values or bounds)
+	for i in range(nwalkers):
+		while True:
+			# Perturb each parameter
+			walker = np.zeros(ndim)
+			
+			# Physical parameters (indices 0-5: temp, scaling, temp2, scaling2, surface_density, Jv_Scale)
+			for j in range(6):
+				param_range = bounds[list(bounds.keys())[j]][1] - bounds[list(bounds.keys())[j]][0]
+				perturbation = 0.1 * param_range * np.random.randn()
+				walker[j] = p0[j] + perturbation
+			
+			# Mass fractions (indices 6+)
+			for j in range(6, ndim):
+				walker[j] = p0[j] * (1 + 0.1 * np.random.randn())
+				walker[j] = max(0, walker[j])  # Keep positive
+			
+			# Check if this walker is valid
+			if np.isfinite(log_prior(walker)):
+				pos.append(walker)
+				break
+	
+	return np.array(pos)
+
+def plot_burnin_progress(sampler, step, ndim, param_names):
+	"""
+	Plot current state of chains during burn-in.
+	"""
+	fig, axes = plt.subplots(ndim, 1, figsize=(10, 2*ndim), sharex=True)
+	
+	samples = sampler.get_chain()
+	
+	for i in range(ndim):
+		ax = axes[i] if ndim > 1 else axes
+		ax.plot(samples[:step, :, i], "k", alpha=0.3)
+		ax.set_ylabel(param_names[i])
+		ax.yaxis.set_label_coords(-0.1, 0.5)
+	
+	axes[-1].set_xlabel("Step")
+	plt.tight_layout()
+	plt.savefig(output_foldername + f'burnin_progress_step{step}.png', dpi=150)
+	plt.close()
+
+def calculate_acceptance_fraction(sampler):
+	"""Calculate mean acceptance fraction across walkers."""
+	return np.mean(sampler.acceptance_fraction)
+
+def save_diagnostic_plots(sampler, aperture, param_names, ndim, burnin=1000):
+	"""
+	Save trace plots and corner plot after MCMC run.
+	"""
+	# Get samples
+	samples = sampler.get_chain()
+	flat_samples = sampler.get_chain(discard=burnin, thin=THIN, flat=True)
+	
+	# 1. Trace plots
+	fig, axes = plt.subplots(ndim, 1, figsize=(10, 2*ndim), sharex=True)
+	
+	for i in range(ndim):
+		ax = axes[i] if ndim > 1 else axes
+		ax.plot(samples[:, :, i], "k", alpha=0.1)
+		ax.axvline(burnin, color='red', linestyle='--', alpha=0.5, label='Burn-in')
+		ax.set_ylabel(param_names[i])
+		ax.yaxis.set_label_coords(-0.1, 0.5)
+		if i == 0:
+			ax.legend()
+	
+	axes[-1].set_xlabel("Step")
+	fig.suptitle(f'{source_name} {aperture} - Chain Traces')
+	plt.tight_layout()
+	plt.savefig(output_foldername + f'trace_plot_{source_name}_{aperture}.png', dpi=200)
+	plt.close()
+	
+	# 2. Corner plot
+	try:
+		fig = corner.corner(
+			flat_samples,
+			labels=param_names,
+			quantiles=[0.16, 0.5, 0.84],
+			show_titles=True,
+			title_fmt='.3e',
+			title_kwargs={"fontsize": 9},
+			label_kwargs={"fontsize": 10},
+			smooth=1.0,
+			bins=30,
+			color='steelblue',
+			fill_contours=True,
+			levels=(0.68, 0.95),
+			plot_datapoints=True,
+			plot_density=True,
+			hist_kwargs={'density': True}
+		)
+		fig.suptitle(f'{source_name} {aperture} - Posterior Distributions', fontsize=14, y=1.0)
+		plt.tight_layout()
+		plt.savefig(output_foldername + f'corner_plot_{source_name}_{aperture}.png', dpi=300)
+		plt.savefig(output_foldername + f'corner_plot_{source_name}_{aperture}.pdf')
+		plt.close()
+	except Exception as e:
+		print(f"Warning: Could not create corner plot: {e}")
+	
+	# 3. Acceptance fraction histogram
+	fig, ax = plt.subplots(1, 1, figsize=(8, 5))
+	ax.hist(sampler.acceptance_fraction, bins=30, alpha=0.7, edgecolor='black')
+	ax.axvline(np.mean(sampler.acceptance_fraction), color='red', linestyle='--', 
+			   label=f'Mean = {np.mean(sampler.acceptance_fraction):.3f}')
+	ax.set_xlabel('Acceptance Fraction')
+	ax.set_ylabel('Number of Walkers')
+	ax.set_title(f'{source_name} {aperture} - Acceptance Fractions')
+	ax.legend()
+	plt.tight_layout()
+	plt.savefig(output_foldername + f'acceptance_fraction_{source_name}_{aperture}.png', dpi=150)
+	plt.close()
+
+def print_mcmc_summary(sampler, param_names, burnin=1000):
+	"""
+	Print summary statistics from MCMC run.
+	"""
+	flat_samples = sampler.get_chain(discard=burnin, thin=THIN, flat=True)
+	
+	print("\n" + "="*80)
+	print("MCMC SUMMARY")
+	print("="*80)
+	print(f"Total samples (after burn-in and thinning): {len(flat_samples)}")
+	print(f"Mean acceptance fraction: {np.mean(sampler.acceptance_fraction):.3f}")
+	print(f"Autocorrelation time estimates:")
+	
+	try:
+		tau = sampler.get_autocorr_time(quiet=True)
+		for i, name in enumerate(param_names):
+			print(f"  {name:20s}: {tau[i]:8.1f} steps")
+	except:
+		print("  Could not compute (chain may be too short)")
+	
+	print("\nParameter estimates (median ± 1σ):")
+	print("-"*80)
+	
+	for i, name in enumerate(param_names):
+		mcmc = np.percentile(flat_samples[:, i], [16, 50, 84])
+		q = np.diff(mcmc)
+		print(f"{name:20s}: {mcmc[1]:12.6e} +{q[1]:12.6e} -{q[0]:12.6e}")
+	
+	print("="*80 + "\n")
+
+############################################################
+#														   #	
+#	 MAIN FITTING LOOP									   #
+#														   #
+############################################################
+
+# Distances (specified above).
+if source_name not in distance_dict.keys():
+	raise ValueError('Distance for this source not found. Please specify a distance. Exiting...')
+	exit()
+else:
+	d = distance_dict[source_name]
+
+# Column names for output (Jv_T removed, it's fixed at 5000)
+columns = ['ID','chi2_red','temp','scaling','temp2','scaling2','surface_density','Jv_Scale']
+for i,gsize in enumerate(grain_sizes):
+	for j,gspecies in enumerate(grain_species):
+		columns.append(f'{gspecies}-{gsize}um')
+
+# Parameter names for MCMC (Jv_T removed)
+param_names = ['temp','scaling','temp2','scaling2','surface_density','Jv_Scale']
+for i,gsize in enumerate(grain_sizes):
+	for j,gspecies in enumerate(grain_species):
+		param_names.append(f'{gspecies}-{gsize}um')
+
+for aperture in aper_names:
+	if aperture != 'A1':
+		continue
+
+
+	print("\n" + "="*80)
+	print(f"PROCESSING: {source_name} - Aperture {aperture}")
+	print("="*80)
+	
+	###############################
+	# Load and prepare data
+	###############################
+	
+	if source_name == 'BHR71':
+		fn_band_arr = ['ch1-short','ch1-medium','ch1-long','ch2-short','ch2-medium','ch2-long',
+					'ch3-short','ch3-medium','ch3-long','ch4-short','ch4-medium','ch4-long'] 
+		fn_base = [input_foldername + 'BHR71-%s__circle_1.00_arcsec_%s_defringed.txt'%(aperture,x) for x in fn_band_arr]
+		um_base_arr = []
+		flux_base_arr = []
+		unc_base_arr = []
+		for fn in fn_base:
+			um_base,flux_base,unc_base = np.loadtxt(fn,delimiter=' ').T
+			um_base_arr += list(um_base)
+			flux_base_arr += list(flux_base)
+			unc_base_arr += list(unc_base)
+		u_use = np.array(um_base_arr)
+		f_use = np.array(flux_base_arr)
+		unc_use = np.array(unc_base_arr)
+	else:
+		fn_base = input_foldername + '/L1448MM1_aper%s.spectra'%(aperture)
+		sp_base = merge_subcubes(load_spectra(fn_base))
+		u_use,f_use,unc_use = [sp_base[x] for x in ['um', 'flux', 'flux_unc']]
+	
+	if len(f_use[np.isfinite(f_use)])==0:
+		print(f'No data in source {source_name}, aperture {aperture}. Skipping...')
+		continue
+	
+	# Prepare spectrum for fit
+	prepared_spectra = prepare_spectra_for_fit(u_use,f_use,unc_use,fit_wavelengths,um_cut=27.5)
+	
+	spectra_cols = ['um','flux','unc']
+	fit_um,fit_flux,fit_unc = [prepared_spectra['fitdata:%s'%(x)] for x in spectra_cols]
+	u_use,f_rad,unc_rad = [prepared_spectra['unmasked:%s'%(x)] for x in spectra_cols]
+	
+	# Regrid opacities to fit wavelengths
+	rkabs_arr = regrid_kappas(wave,kabs_arr,fit_um)
+	rksca_arr = regrid_kappas(wave,ksca_arr,fit_um)
+	
+	###############################
+	# Set up MCMC
+	###############################
+	
+	# Set global variables for log_probability function
+	_fit_um = fit_um
+	_fit_flux = fit_flux
+	_fit_unc = fit_unc
+	_rkabs_arr = rkabs_arr
+	_rksca_arr = rksca_arr
+	
+	# Get bounds for this model
+	bounds = {}
+	for param in model_parameters:
+		key = f'ALL:ALL:{model_str}:{param}'
+		if key in bounds_dict:
+			bounds[param] = bounds_dict[key]
+		else:
+			print(f"Warning: No bounds found for {param}, using defaults")
+			bounds[param] = [0, 1e10]
+	
+	_bounds = bounds
+	
+	# Initial guess - try to load from previous results first
+	if USE_PREVIOUS_RESULTS:
+		print(f"\nAttempting to load initial guess from previous results...")
+		p0_physical_loaded, p0_mfrac_loaded = load_initial_guess_from_csv(
+			PREVIOUS_RESULTS_FOLDER, 
+			source_name, 
+			aperture, 
+			n_samples=N_SAMPLES_TO_AVERAGE
+		)
+		
+		if p0_physical_loaded is not None and p0_mfrac_loaded is not None:
+			# Successfully loaded
+			p0_physical = p0_physical_loaded
+			p0_mfrac = p0_mfrac_loaded
+			print(f"✓ Using loaded initial guess")
+		else:
+			# Failed to load, use defaults
+			print(f"✗ Using default initial guess")
+			mfrac_arr = np.zeros((len(grain_sizes),len(grain_species)))
+			mfrac_arr += 1/(len(grain_sizes)*len(grain_species))
+			
+			p0_physical = p0_dict[f'ALL:ALL:{model_str}']
+			p0_mfrac = list(mfrac_arr.flatten())
+	else:
+		# Use default initial guess
+		print(f"\nUsing default initial guess")
+		mfrac_arr = np.zeros((len(grain_sizes),len(grain_species)))
+		mfrac_arr += 1/(len(grain_sizes)*len(grain_species))
+		
+		p0_physical = p0_dict[f'ALL:ALL:{model_str}']
+		p0_mfrac = list(mfrac_arr.flatten())
+	
+	# Combine physical parameters and mass fractions
+	p0 = p0_physical + p0_mfrac
+	
+	# Number of dimensions
+	ndim = len(p0)
+	
+	print(f"\nMCMC Setup:")
+	print(f"  Number of parameters: {ndim}")
+	print(f"  Number of walkers: {NWALKERS}")
+	print(f"  Number of steps: {NSTEPS}")
+	print(f"  Burn-in steps: {NBURN}")
+	print(f"  Initial log probability: {log_probability(p0):.2f}")
+	
+	# Check if initial guess is valid
+	if not np.isfinite(log_probability(p0)):
+		print(WARNING + "WARNING: Initial guess has invalid log probability!" + ENDC)
+		print(WARNING + "This usually means parameters are outside bounds." + ENDC)
+		print("Parameter values:")
+		for i, (name, val) in enumerate(zip(param_names, p0)):
+			print(f"  {name}: {val:.6e}")
+	
+	# Initialize walkers
+	print("\nInitializing walkers...")
+	pos = initialize_walkers(p0, NWALKERS, ndim, bounds)
+	
+	# Check that all initial positions are valid
+	for i, p in enumerate(pos):
+		if not np.isfinite(log_probability(p)):
+			print(f"Warning: Walker {i} has invalid initial position!")
+	
+	###############################
+	# Run MCMC
+	###############################
+	
+	if USE_PARALLEL:
+		print(f"Running MCMC with {NCORES} cores...")
+		with Pool(NCORES) as pool:
+			# Try reducing 'a' from 2.0 to 1.5 or 1.25
+			moves = emcee.moves.StretchMove(a=1.5)
+
+			sampler = emcee.EnsembleSampler(NWALKERS, ndim, log_probability, pool=pool,moves=moves)
+			
+			# Run with progress bar
+			for i, result in enumerate(sampler.sample(pos, iterations=NSTEPS, progress=True)):
+				# Optionally plot progress during burn-in
+				if PLOT_DURING_BURNIN and i < NBURN and i % BURNIN_PLOTTING_STEPS == 0 and i > 0:
+					plot_burnin_progress(sampler, i, ndim, param_names)
+	else:
+		print("Running MCMC (single core)...")
+		sampler = emcee.EnsembleSampler(NWALKERS, ndim, log_probability)
+		
+		# Run with progress bar
+		for i, result in enumerate(sampler.sample(pos, iterations=NSTEPS, progress=True)):
+			if PLOT_DURING_BURNIN and i < NBURN and i % BURNIN_PLOTTING_STEPS == 0 and i > 0:
+				plot_burnin_progress(sampler, i, ndim, param_names)
+	
+	###############################
+	# Analyze results
+	###############################
+	
+	print("\nMCMC complete!")
+	print(f"Mean acceptance fraction: {np.mean(sampler.acceptance_fraction):.3f}")
+	
+	# Recommended: 0.2-0.4 for good mixing
+	if np.mean(sampler.acceptance_fraction) < 0.15:
+		print(WARNING + "Warning: Low acceptance fraction. Consider increasing step size or checking priors." + ENDC)
+	elif np.mean(sampler.acceptance_fraction) > 0.6:
+		print(WARNING + "Warning: High acceptance fraction. Consider decreasing step size." + ENDC)
+	
+	# Print summary
+	print_mcmc_summary(sampler, param_names, burnin=NBURN)
+	
+	# Get samples (discard burn-in)
+	flat_samples = sampler.get_chain(discard=NBURN, thin=THIN, flat=True)
+	flat_log_prob = sampler.get_log_prob(discard=NBURN, thin=THIN, flat=True)
+	
+	# Calculate chi2_red for each sample
+	n_data = len(fit_flux)
+	dof = n_data - ndim
+	chi2_red = -2 * flat_log_prob / dof
+	
+	###############################
+	# Save results
+	###############################
+	
+	print(f"\nSaving results for {source_name} aperture {aperture}...")
+	
+	# Create DataFrame
+	df = pd.DataFrame(flat_samples, columns=param_names)
+	df['chi2_red'] = chi2_red
+	df['ID'] = np.arange(len(df))
+	
+	# Reorder columns to match original format
+	df = df[['ID', 'chi2_red'] + param_names]
+	
+	# Save to CSV
+	output_filename = output_foldername + f'fitting_results_{source_name}_{aperture}.csv'
+	df.to_csv(output_filename, index=False)
+	print(f"Saved to: {output_filename}")
+	
+	# Save diagnostic plots
+	if SAVE_DIAGNOSTIC_PLOTS:
+		print("Creating diagnostic plots...")
+		save_diagnostic_plots(sampler, aperture, param_names, ndim, burnin=NBURN)
+	
+	print(OKGREEN + f"Completed {source_name} aperture {aperture}!" + ENDC)
+
+print("\n" + "="*80)
+print("ALL APERTURES COMPLETE!")
+print("="*80)

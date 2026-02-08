@@ -34,16 +34,14 @@ for aperture in aper_names:
 	um_psfmodel,flux_psfmodel,unc_psfmodel = [sp_psfmodel[x] for x in ['um', 'flux', 'flux_unc']]
 	um_psfsub,flux_psfsub,unc_psfsub = [sp_psfsub[x] for x in ['um', 'flux', 'flux_unc']]
 
-	inds_base = np.where(flux_base > 3*unc_base)
-	inds_psfmodel = np.where(flux_psfmodel > 3*unc_psfmodel)
-	inds_psfsub = np.where(flux_psfsub > 3*unc_psfsub)
+	#inds_base = np.where(flux_base > 3*unc_base)
+	#inds_psfmodel = np.where(flux_psfmodel > 3*unc_psfmodel)
+	#inds_psfsub = np.where(flux_psfsub > 3*unc_psfsub)
 	plt.close()
 	plt.figure(figsize = (10,4))
-	plt.scatter(um_base,flux_base,alpha=0.1,color='blue',s=0.2)
-	plt.plot(um_base[inds_base],flux_base[inds_base],label='BASE',color='blue')
-	plt.plot(um_psfmodel,flux_psfmodel,label='PSF Model',color='red')
-	plt.scatter(um_psfsub,flux_psfsub,label='PSF Sub',color='orange',alpha=0.1,s=0.2)
-	plt.plot(um_psfsub[inds_psfsub],flux_psfsub[inds_psfsub],label='PSF Sub',color='orange')
+	plt.scatter(um_base,flux_base,color='blue',s=0.7)
+	plt.scatter(um_psfmodel,flux_psfmodel,label='PSF Model',color='red',s=0.7)
+	plt.scatter(um_psfsub,flux_psfsub,label='PSF Sub',color='orange',s=0.7)
 	plt.xlabel(r'Wavelength ($\mu$m)')
 	plt.ylabel('Flux Density (Jy)')
 	plt.title('L1448MM Aperture: %s'%(aperture))

@@ -31,8 +31,8 @@ fn_line_pars = '/home/vorsteja/Documents/JOYS/JDust/line_parameter_files/%s_line
 
 #Input-output
 source_name = 'L1448-mm'
-output_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_post_processing/line_cubes/%s/'%(line_type)
-foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_post_processing/'
+output_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/line_maps/%s/'%(line_type)
+foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/'
 cont_inputfoldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_post_processing/PSF_Subtraction/continuum_maps/'
 
 #Should not be necessary to change.

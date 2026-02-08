@@ -84,6 +84,9 @@ colorbar_label = r'Flux Density (MJy sr$^{-1}$ $\mu$m)'
 
 img_type = 'Continuum'
 imshow_cmap = 'magma'
+
+ann_strs = ['a)','b)','c)','d)','e)','f)','g)','h)','i)','j)','k)']
+
 for i in range(len(img_arr)):
 	if i != 999:
 		hide_ticks = True
@@ -104,6 +107,15 @@ for i in range(len(img_arr)):
 	ax = annotate_imshow(ax,hdr,hide_ticks=hide_ticks,source_name=source_name,wavelength=r'%.1f $\mu$m'%(mean_um),img_type=img_type,
 		beam_fwhm = fwhm,linear_scale = linear_scale, distance = distance,
 		add_colorbar=True,colorbar_label=colorbar_label,dogrid=True,star_pos=star_pos)
+
+	plt.gca().annotate(
+        ann_strs[i],
+        xy=(0.85, 1), xycoords='axes fraction',
+        xytext=(+0.5, -0.5), textcoords='offset fontsize',
+        fontsize='medium', verticalalignment='top', fontfamily='serif',
+        bbox=dict(facecolor='none', edgecolor='none', pad=3.0))
+
+
 
 fig.subplots_adjust(wspace=-0.3,hspace=0.3)
 fig.savefig(output_figure_name,dpi=300,bbox_inches='tight')
