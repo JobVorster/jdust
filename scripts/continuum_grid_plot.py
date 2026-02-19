@@ -17,26 +17,26 @@ fn_band_arr = ['ch1-short','ch1-medium','ch1-long','ch2-short','ch2-medium','ch2
 'ch3-short','ch3-medium','ch3-long','ch4-short','ch4-medium','ch4-long'] 
 
 
-source_name = 'L1448MM1'
+source_name = 'BHR71-IRS1'
 output_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/publication_figures/'
-input_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_post_processing/PSF_Subtraction/continuum_maps/'
-cube_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_post_processing/PSF_Subtraction/'
+input_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/BHR71/ifualign/PSF_Subtraction/continuum_maps/'
+cube_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/BHR71/ifualign/PSF_Subtraction/'
 
 
-filenames = [input_foldername + 'L1448-mm_%s_s3d_LSRcorr_stripecorr_psfsub_cont2D.fits'%(x) for x in fn_band_arr]
-cube_filenames = [cube_foldername + 'L1448-mm_%s_s3d_LSRcorr_stripecorr_PSFcube.fits'%(x) for x in fn_band_arr]
+filenames = [input_foldername + '%s_%s_s3d_LSRcorr_stripecorr_psfsub_cont2D.fits'%(source_name,x) for x in fn_band_arr]
+cube_filenames = [cube_foldername + '%s_%s_s3d_LSRcorr_stripecorr_PSFcube.fits'%(source_name,x) for x in fn_band_arr]
 
 
 
-output_figure_name = output_foldername + '%s_ch3_ch4_PSFSUB_STRIPE.jpg'%(source_name)
+output_figure_name = output_foldername + '%s_PSFSUB_STRIPE.jpg'%(source_name)
 
 
 filenames.sort()
 shp = (4,3)
 figsize = (14,16)
 
-distance = 240
-linear_scale = 300
+distance = 176
+linear_scale = 200
 
 wcs_arr = []
 hdr_arr = []
@@ -77,15 +77,17 @@ for i,fn in enumerate(filenames):
 fig, ax_arr = generate_image_grid(shp,figsize,wcs_arr)
 ax_arr = ax_arr.flat
 print([len(i) for i in [wcs_arr,hdr_arr,img_arr,subcube_arr,um_arr,ax_arr]])
-ax_arr = align_axes(img_arr,ax_arr,wcs_arr,reference_ax = 0)
+ax_arr = align_axes(img_arr,ax_arr,wcs_arr,reference_ax = 11)
 
-star_pos = ['03h25m38.8898s','+30d44m05.612s']
+star_pos = ['12h01m36.4600s','-65d08m49.259s']
+
+#star_pos = ['03h25m38.8898s','+30d44m05.612s']
 colorbar_label = r'Flux Density (MJy sr$^{-1}$ $\mu$m)'
 
 img_type = 'Continuum'
 imshow_cmap = 'magma'
 
-ann_strs = ['a)','b)','c)','d)','e)','f)','g)','h)','i)','j)','k)']
+ann_strs = ['a)','b)','c)','d)','e)','f)','g)','h)','i)','j)','k)','l)']
 
 for i in range(len(img_arr)):
 	if i != 999:
@@ -97,11 +99,16 @@ for i in range(len(img_arr)):
 	fwhm = get_JWST_PSF(mean_um)
 	if i > 8:
 		vmax = np.percentile(img,[99.9])[0]
-	elif i in [3,4]:
-		vmax = 15
+	elif i == 3:
+		vmax = 75
+	elif i == 4:
+		vmax = 30
 	else:
-		vmax = 250
+		vmax = 500
 	ax.set_facecolor('black')
+
+	img[np.where(img == 0)] = np.nan
+
 	ax.imshow(img,origin='lower',cmap=imshow_cmap,vmin=0,vmax=vmax)
 	
 	ax = annotate_imshow(ax,hdr,hide_ticks=hide_ticks,source_name=source_name,wavelength=r'%.1f $\mu$m'%(mean_um),img_type=img_type,

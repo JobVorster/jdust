@@ -15,7 +15,6 @@ cont_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files
 fn_cont = cont_foldername+'L1448-mm_ch3-medium_s3d_LSRcorr_stripecorr_psfsub_cont2D.fits'
 
 line_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_post_processing/line_cubes/'
-fn_co2 = line_foldername + 'combined_maps/co2/L1448-mm_CO2 _14.9803439087585um.fits'
 
 fn_h2 = line_foldername + 'h2/L1448-mm_H2 _12.2786120207857um.fits'
 

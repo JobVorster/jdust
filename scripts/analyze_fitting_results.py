@@ -6,14 +6,12 @@ import os
 
 source_name = 'L1448MM1'
 aperture_filename = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/input-files/aperture-ini-%s.txt'%(source_name)
-input_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/cavity_modelling/'  
+input_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/cavity_modelling/B2C/'  
 
 if os.path.isfile(aperture_filename):
     aper_names,aper_sizes,coord_list = read_aperture_ini(aperture_filename)
 
 for aperture in aper_names:
-    if aperture != 'B1':
-        continue
     # Read the CSV file
     df = pd.read_csv(input_foldername + 'fitting_results_L1448MM1_%s.csv'%(aperture))
 
@@ -23,8 +21,8 @@ for aperture in aper_names:
 
     # Define parameters to plot (excluding ID and chi2_red for now)
     params = ['temp', 'scaling', 'temp2', 'scaling2', 'surface_density', 'Jv_Scale',
-              'olmg50-0.1um', 'olmg50-1.5um', 'olmg50-6um', 
-              'pyrmg70-0.1um', 'pyrmg70-1.5um', 'pyrmg70-6um']
+              'olmg50-0.1um', 'olmg50-1.5um', 'olmg50-6.0um', 
+              'pyrmg70-0.1um', 'pyrmg70-1.5um', 'pyrmg70-6.0um']
 
     # Create figure with subplots
     fig, axes = plt.subplots(5, 3, figsize=(15, 12))
@@ -55,9 +53,10 @@ for aperture in aper_names:
     plt.show()
 
     # Print summary statistics for last 1000 iterations
-    print("\nSummary statistics (last 1000 iterations):")
+    N_summary = 1000
+    print("\nSummary statistics (last %s iterations):"%(N_summary))
     print("=" * 80)
-    df_summary = df.tail(100)
+    df_summary = df.tail(N_summary)
 
     for param in ['temp', 'temp2', 'surface_density'] + [col for col in df.columns if 'um' in col]:
         mean_val = df_summary[param].mean()

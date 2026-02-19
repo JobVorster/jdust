@@ -37,7 +37,8 @@ def cavity_model(wav,temp,scaling,temp2,scaling2,surface_density,Jv_T,Jv_Scale):
 
 	F_source = blackbody(wav,Jv_T,Jv_Scale)
 
-	model = (source_function(wav,temp,scaling,kabs,ksca,F_source)+source_function(wav,temp2,scaling2,kabs,ksca,F_source)) * np.exp(-surface_density*(kabs+ksca))
+	#model = (source_function(wav,temp,scaling,kabs,ksca,F_source)+source_function(wav,temp2,scaling2,kabs,ksca,F_source)) * np.exp(-surface_density*(kabs+ksca))
+	model = source_function(wav,temp,scaling,kabs,ksca,F_source)* np.exp(-surface_density*(kabs+ksca)) + source_function(wav,temp2,scaling2,kabs,ksca,F_source)*(1-np.exp(-surface_density*(kabs+ksca)))
 	return model
 
 def weighted_kappa(mfrac_arr,kappa_arr):
@@ -295,6 +296,10 @@ else:
 	d = distance_dict[source_name]
 
 for aperture in aper_names:
+
+	if aperture != 'B1':
+		continue
+
 	#This needs some attention. Its the extraction of data for a specific source.
 	if source_name == 'BHR71':
 		fn_base = [input_foldername + 'BHR71-%s__circle_1.00_arcsec_%s_defringed.txt'%(aperture,x) for x in fn_band_arr]
@@ -346,19 +351,10 @@ for aperture in aper_names:
 
 	rkabs_arr_all = regrid_kappas(wave,kabs_arr,u_use)
 	rksca_arr_all = regrid_kappas(wave,ksca_arr,u_use)
-	do_plot = False
+	do_plot = True
 
 	print('Fitting for source %s aperture %s'%(source_name,aperture))
-
-	if do_plot:
-
-		plt.ion()
-		fig = plt.figure(figsize=(16, 14))
-		gs = fig.add_gridspec(3, 1, height_ratios=[2, 1, 1], hspace=0.3)
-		ax = fig.add_subplot(gs[0])
-		ax_mid = fig.add_subplot(gs[1])
-		ax2 = fig.add_subplot(gs[2])
-
+		
 	temp = 70
 	scaling = 1e-9
 	temp2 = 400 
@@ -410,14 +406,31 @@ for aperture in aper_names:
 		model_eval = cavity_model_mfrac(fit_um,temp,scaling,temp2,scaling2,surface_density,Jv_T,Jv_Scale,mfrac_arr,rkabs_arr,rksca_arr)
 		
 		# Inside the loop
-		if k_params % 100000 == 0:
+		if k_params %100000 == 0:
 			print('Iteration %d of %d'%(k_params,N_iter))
 
 			if do_plot:
-				ax.clear()
-				ax_mid.clear()
-				ax2.clear()
-				
+
+				fig = plt.figure(figsize=(16, 14))
+				gs = fig.add_gridspec(3, 1, height_ratios=[2, 1, 1], hspace=0.3)
+				ax = fig.add_subplot(gs[0])
+				ax_mid = fig.add_subplot(gs[1])
+				ax2 = fig.add_subplot(gs[2])
+				'''
+				temp = 107
+				scaling = 8.1e-5
+				temp2 = 600.53
+				scaling2 = 3.72e-8
+				Jv_Scale = 1.5e-10
+
+				mfrac_arr[0][0] = 0.69
+				mfrac_arr[1][0] = 0.01
+				mfrac_arr[2][0] = 0
+				mfrac_arr[0][1] = 0.89
+				mfrac_arr[1][1] = 0
+				mfrac_arr[2][1] = 0
+				'''
+
 				model_all_um = cavity_model_mfrac(u_use,temp,scaling,temp2,scaling2,surface_density,Jv_T,Jv_Scale,mfrac_arr,rkabs_arr_all,rksca_arr_all)
 				param_str = (f"temp = {temp:.2f}\n"
 							 f"scaling = {scaling:.2e}\n"
@@ -520,8 +533,7 @@ for aperture in aper_names:
 				ax2.set_xlabel('Grain Species & Size')
 				ax2.grid(axis='y', alpha=0.3)
 				
-				plt.draw()
-				plt.pause(0.001)
+				plt.show()
 			
 		#Residual
 		residual_e = np.array(fit_flux - model_eval)
@@ -579,8 +591,4 @@ for aperture in aper_names:
 			inarr = np.array(pars_arr)[:,i-2]
 		df[col] = inarr
 	df.to_csv(output_foldername + 'fitting_results_%s_%s.csv'%(source_name,aperture))
-	if do_plot:
-		# After the loop, turn off interactive mode
-		plt.ioff()
-		plt.show()
 

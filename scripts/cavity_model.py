@@ -108,7 +108,8 @@ aperture_area = np.pi*aperture_radius**2/(3e18)**-2
 #END IN PROGRESS
 
 model_str = 'CM' #Options: CM, CMWIND, CM_ANI 
-source_name = 'L1448MM1' #Options: L1448MM1, BHR71
+source_name = 'BHR71' #Options: L1448MM1, BHR71
+spectral_resolution = None
 kp5_filename = "/home/vorsteja/Documents/JOYS/Collaborator_Scripts/Sam_Extinction/KP5_benchmark_RNAAS.csv"
 opacity_foldername = '/home/vorsteja/Documents/JOYS/JDust/optool_opacities/'
 
@@ -118,7 +119,7 @@ if sys.argv[1] =='':
 #op_fn = '' #If None then it is KP5.
 
 #Wavelength to fit.
-fit_wavelengths = [[4.92,27.5]]
+fit_wavelengths = [[4.7,5.67],[7.44,27.5]]
 
 #Wavelength ranges to calculate reduced chi2
 chi_ranges = [[4.93,5.6],[7.7,8],[8.5,11.5],[12,14],[15.7,17],[19,20.5]]
@@ -215,7 +216,7 @@ elif source_name == 'BHR71':
 	fn_band_arr = ['ch1-short','ch1-medium','ch1-long','ch2-short','ch2-medium','ch2-long',
 				'ch3-short','ch3-medium','ch3-long','ch4-short','ch4-medium','ch4-long'] 
 	input_foldername = '/home/vorsteja/Documents/JOYS/JDust/BHR71_scripts_12122025/BHR71_unc/BHR71/spectra_werrors/circle/1.00_arcsec/spectra_sci/'
-	aper_names = ['b1', 'b2', 'b3', 'b4', 'cr1', 'o5']
+	aper_names = ['b1', 'b2', 'b3', 'b4', 'cr1', 'o5'] + ['cl1','cl2','cl3','cr2','cr3','cr4']
 
 ############################################################
 #														   #	
@@ -267,8 +268,8 @@ bounds_dict = {}
 uT_emit = 1000
 uO_emit = 0.1
 uSD = 0.2
-uT_star = 5001 #Fix the scattering temperature (its degenerate with the scaling).
-lT_star = 4999
+uT_star = 1000 #Fix the scattering temperature (its degenerate with the scaling).
+lT_star = 6000
 utheta = 180
 uFF = 0.5
 
@@ -370,21 +371,25 @@ for aperture in aper_names:
 
 	#This needs some attention. Its the extraction of data for a specific source.
 	if source_name == 'BHR71':
-		fn_base = [input_foldername + 'BHR71-%s__circle_1.00_arcsec_%s_defringed.txt'%(aperture,x) for x in fn_band_arr]
-		um_base_arr = []
-		flux_base_arr = []
-		unc_base_arr = []
-		for fn in fn_base:
-			#Extract wavelengths, fluxes and uncertainties.
-			um_base,flux_base,unc_base = np.loadtxt(fn,delimiter=' ').T
-		
-			um_base_arr += list(um_base)
-			flux_base_arr += list(flux_base)
-			unc_base_arr += list(unc_base)
+		if aperture in  ['b1', 'b2', 'b3', 'b4', 'cr1', 'o5']:
+			fn_base = [input_foldername + 'BHR71-%s__circle_1.00_arcsec_%s_defringed.txt'%(aperture,x) for x in fn_band_arr]
+			um_base_arr = []
+			flux_base_arr = []
+			unc_base_arr = []
+			for fn in fn_base:
+				#Extract wavelengths, fluxes and uncertainties.
+				um_base,flux_base,unc_base = np.loadtxt(fn,delimiter=' ').T
+			
+				um_base_arr += list(um_base)
+				flux_base_arr += list(flux_base)
+				unc_base_arr += list(unc_base)
 
-		u_use = np.array(um_base_arr)
-		f_use = np.array(flux_base_arr)
-		unc_use = np.array(unc_base_arr)
+			u_use = np.array(um_base_arr)
+			f_use = np.array(flux_base_arr)
+			unc_use = np.array(unc_base_arr)
+		elif aperture in ['cl1','cl2','cl3','cr2','cr3','cr4']:
+			fn = input_foldername + 'extra_apertures/' + 'BHR71-%s_sci_circle_1.00_arcsec_final.txt'%(aperture)
+			u_use,f_use,unc_use = np.loadtxt(fn,delimiter=' ').T
 	else:
 		#Filenames of spectra extracted and saved with the jdspextract functions.
 		fn_base = input_foldername + 'L1448MM1_aper%s.spectra'%(aperture)
@@ -405,7 +410,7 @@ for aperture in aper_names:
 	#Line masking.
 	#Selecting fit wavelengths.
 	#NaN flagging.
-	prepared_spectra = prepare_spectra_for_fit(u_use,f_use,unc_use,fit_wavelengths,um_cut=27.5)
+	prepared_spectra = prepare_spectra_for_fit(u_use,f_use,unc_use,fit_wavelengths,um_cut=27.5,spectral_resolution=spectral_resolution)
 	
 
 	spectra_cols = ['um','flux','unc']

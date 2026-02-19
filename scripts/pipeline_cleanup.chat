@@ -1,0 +1,788 @@
+# JWST Data Analysis Pipeline Documentation - Updated
+
+**Purpose:** This document serves as context for cleaning up and organizing a 5000+ line JWST data analysis pipeline into a repeatable workflow.
+
+**Instructions for use:** 
+- Upload this document at the start of each chat session
+- Incrementally populate sections as you document each script
+- Use this to track workflow connections and identify refactoring opportunities
+- At this stage DO NOT SUGGEST SPECIFIC CHANGES! Just document according to this template. Suggesting specific changes will waste compute power. One claude burned all my tokens by writing a readme about the changes I should make. I know I know I am a finite meatbag. But let me call the shots for now. I know my context.
+- Again DO NOT SUGGEST SPECIFIC CHANGES. The user wants information ACCORDING TO THE TEMPLATE before action at this stage.
+
+- Very helpful thing to search for is repeated functionality, and ultimately which versions of functions are superior.
+
+---
+
+## 1. Script Descriptions
+
+### jdutils.py
+
+- **Name:** `jdutils.py`
+- **Type:** Core Utility Module
+- **Purpose:** Central utility functions for JWST MIRI MRS data handling. Provides essential functions for unpacking FITS files, wavelength calculations, coordinate handling, aperture definitions, and PSF calculations. This is a dependency for most other modules.
+
+- **Key Functions:**
+  - `unpack_hdu(fn)` - Unpack IFU cube into data, uncertainty, DQ, header, wavelengths, and shape
+  - `get_JWST_IFU_um(header)` - Calculate wavelength array from FITS header using JWST formula
+  - `interpolate_nan(array_like)` - Fill NaN values with interpolation from surrounding entries
+  - `is_nan_map(array)` - Check if N-dimensional array consists only of NaNs
+  - `make_moment_map(data_cube, unc_cube, chan_lower, chan_upper, order=0)` - Create moment maps from spectral cubes
+  - `get_wcs_arr(filenames)` - Extract 2D WCS projections from list of FITS files
+  - `get_subcube_name(filename)` - Parse subcube name from filename (e.g., 'ch4-short')
+  - `get_source_name(filename)` - Parse source name from filename
+  - `define_circular_aperture(RA_centre, Dec_centre, size_arcsec)` - Create photutils circular sky aperture
+  - `get_JWST_PSF(um)` - Calculate JWST PSF FWHM from Law et al. 2023 formula
+  - `read_aperture_ini(filename, sep=',')` - Read aperture definitions from CSV file
+
+- **Hardcoded Elements:**
+  - JWST PSF formula from Law et al. 2023: `fwhm = 0.033*um + 0.106` (line 171)
+  - Naming convention assumption: `SOURCE_SUBCHANNEL_s3d_LSRcorr.fits` (lines 115, 130)
+  - WCS header assumptions: expects hdu[1] to contain science data with spectral axis to drop (line 105)
+  - Moment map only implements order=0, higher orders raise ValueError (line 81)
+
+- **Questionable Parts:**
+  - No validation of filename format - will fail silently with incorrect naming conventions
+  - `interpolate_nan()` may not be appropriate for all data types (doesn't preserve uncertainties)
+  - Limited error handling for file I/O operations
+  - Aperture CSV format is assumed but not documented in docstrings
+
+- **Dependencies:**
+  - pandas
+  - numpy
+  - astropy.coordinates (SkyCoord)
+  - photutils.aperture (SkyCircularAperture)
+  - spectres
+  - astropy.io.fits
+  - astropy.wcs (WCS)
+  - astropy.units
+
+- **Status:** Documented | Core Dependency
+
+---
+
+### jdvis.py
+
+- **Name:** `jdvis.py`
+- **Type:** Visualization Module
+- **Purpose:** Comprehensive plotting and visualization utilities for JWST MIRI MRS data. Handles spectral plots, image displays with WCS axes, multi-panel figures, aperture overlays, and publication-quality annotations.
+
+- **Key Functions:**
+  - `plot_unstitched_spectra(results, umlim=None)` - Plot spectra before stitching across channels
+  - `get_image_world_extent(img, wcs_2D, filter_nans=True)` - Get image corners in world coordinates
+  - `get_image_pixel_extent(wcs_2D, world_bl, world_br, world_tl, world_tr)` - Convert world extent to pixel coordinates
+  - `generate_image_grid(shp, figsize, wcs_arr=None)` - Create subplot grid with optional WCS projections
+  - `annotate_imshow(ax, hdr, hide_ticks=False, ...)` - Annotate WCS images with extensive customization options
+  - `align_axes(img_arr, ax_arr, wcs_arr, reference_ax=0)` - Align multiple axes based on reference image extent
+  - `make_snr_figures(mom0, mom0_unc, wcs_2D, contour_levels=None, ...)` - Create three-panel SNR diagnostic figures
+  - `plot_apertures(aper_names, aper_sizes, aper_coords, ax, wcs_2D, ...)` - Overlay named apertures on WCS axes
+
+- **Hardcoded Elements:**
+  - Physical constants: `pc_to_au = 206265`, `deg_to_arcsec = 3600` (lines 13-14)
+  - Annotation position hardcoded: top-left with 0.2 extent percentage (lines 125-132)
+  - Scalebar position: `extent_perc = 0.10` in top-right (lines 156-171)
+  - Y-axis limit adjustment: `ylim = [min(y_arr), 0.88*max(y_arr)]` in `get_image_pixel_extent()` (line 84)
+  - Tick spacing: 1 arcsec for RA/Dec (lines 109-110)
+  - SNR colorbar fraction: 0.046 (lines 234, 239, 243)
+  - Aperture overlay parameters: `zorder=5`, default `alpha=0.4` (line 278)
+
+- **Questionable Parts:**
+  - Line 76: "HI, PLEASE MAKE A DOCSTRING FOR get_image_pixel_extent" - Missing documentation
+  - Line 91: "This is so lazy, sorry. Clean it up if you want!" - Inefficient corner calculation loop
+  - Line 119: "(annotate_imshow) Please test and add a docstring to this function!!" - Needs testing
+  - Complex `annotate_imshow()` function with many parameters (17 parameters) - could be refactored
+  - Hardcoded ylim adjustment (0.88 factor) with no explanation
+  - Limited colormap options - most are hardcoded
+
+- **Dependencies:**
+  - matplotlib.pyplot
+  - numpy
+  - astropy.coordinates (SkyCoord)
+  - photutils.aperture (SkyCircularAperture, CircularAperture)
+  - astropy.visualization.wcsaxes (WCSAxes, add_beam)
+  - astropy.wcs (WCS)
+  - astropy.units
+  - ifu_analysis.jdutils (define_circular_aperture)
+
+- **Status:** Documented | Needs Testing & Docstrings
+
+---
+
+### jdlines.py
+
+- **Name:** `jdlines.py`
+- **Type:** Spectral Line Analysis Module
+- **Purpose:** Extract and analyze emission/absorption lines from JWST MIRI MRS cubes. Performs continuum subtraction using baseline fitting, Gaussian fitting to detected lines, and velocity calculations.
+
+- **Key Functions:**
+  - `gaussian(x, A, mu, sigma)` - Simple Gaussian function for fitting
+  - `um_to_vlsr(um, lambda0)` - Convert wavelength to LSR velocity
+  - `strip_spaces(str1)` - Clean up species names from line catalogs
+  - `line_figure(line_map, line_um, line_name, wcs)` - Create figure for line intensity maps
+  - `get_line_parameters(fn)` - Read line catalog file (wavelength, A coefficient, energy levels, etc.)
+  - `choose_subchannel(lambda0, foldername, selecter, header_hdu)` - Find appropriate subcube for given wavelength
+  - `get_line_cube(fn, lambda0, N_chans, store_type='DATA', N_sigma=5)` - Extract continuum-subtracted line cube using pybaselines
+
+- **Hardcoded Elements:**
+  - Wavelength range filter: `4.90027 < wavelength < 27.5` μm (line 42)
+  - Line detection threshold: `N_sigma=5` default (line 91)
+  - Gaussian initial guess parameters: `p0 = [max(neighbouring_points), um[line_ind], 0.3]` (line 135)
+  - Baseline fitting algorithm: `pspline_arpls` (line 110)
+  - Line cube storage types: 'DATA' or 'MODEL' (lines 119-154)
+  - Diagnostic plotting flag: `if (1):` blocks (lines 143-161)
+  - Neighboring points for Gaussian fitting: `[-1, 0, 1]` indices (line 134)
+
+- **Questionable Parts:**
+  - Line 19: "The formula and sign should still be DOUBLE CHECKED!" - Velocity conversion needs verification
+  - Lines 143-161: Large diagnostic plotting block with `if (1):` - should be controlled by flag
+  - Hardcoded decision to fit Gaussians only when > N_sigma in neighboring pixels (lines 130-131)
+  - Try/except block around Gaussian fitting with "FITTING FAILED" prints but no proper error handling
+  - Line catalog format is assumed but not validated (tab-separated with specific columns)
+  - The 'MODEL' storage type attempts Gaussian fitting but has minimal error handling
+
+- **Dependencies:**
+  - ifu_analysis.jdutils (get_JWST_IFU_um, interpolate_nan, unpack_hdu, get_subcube_name, get_JWST_PSF)
+  - astropy.io.fits
+  - numpy
+  - pybaselines (Baseline)
+  - matplotlib.pyplot
+  - astropy.constants
+  - astropy.units
+  - pandas
+  - glob
+  - scipy.optimize (curve_fit)
+
+- **Status:** Documented | Needs Validation & Error Handling
+
+---
+
+### jdcontinuum.py
+
+- **Name:** `jdcontinuum.py`
+- **Type:** Continuum Analysis Module
+- **Purpose:** Extract and analyze continuum emission from JWST MIRI MRS cubes. Provides automatic continuum estimation using baseline fitting (pybaselines FABC algorithm), manual continuum masking, spectral index mapping, and integrated continuum map generation.
+
+- **Key Functions:**
+  - `multiply_along_axis(A, B, axis)` - Multiply arrays along specified axis (utility)
+  - `read_cont_mask_arr(filename, sep=',')` - Read continuum wavelength masks from CSV
+  - `make_spectral_index_map(um, cube, unc_cube)` - Calculate spectral index across wavelength range
+  - `save_cont_cube(cont_cube, unc_cube, dq_cube, original_hdu, filename)` - Save continuum cube to FITS
+  - `resample_cube(um, cube, cube_unc, resampled_um)` - Resample cube to new wavelength grid
+  - `radec_to_pixels(ra, dec, wcs)` - Convert RA/Dec to pixel coordinates
+  - `continuum_masking_figure(um, flux, flux_masked, baseline, subcube, plot_coords, saveto)` - Diagnostic plot
+  - `automatic_continuum_cube(fn, num_std=3, lam=1e4, scale=5, ...)` - Automatic continuum estimation using FABC
+  - `cont_integrated_map(um, cont_cube, unc_cont_cube, wcs_2D, saveto=None, n_sigma=5)` - Create integrated continuum map
+  - `get_cont_cube(data_cube, um, method=None, cont_filename=None, sep=',')` - Manual continuum extraction using masks
+
+- **Hardcoded Elements:**
+  - **CRITICAL:** Diagnostic plotting coordinates hardcoded (lines 65-67):
+    - `ra, dec = ['03h25m38.8898s','+30d44m05.612s', ...]` (L1448MM1 specific)
+    - Second set: `['03h25m38.7708s','+30d44m08.823s']`
+  - Default baseline parameters: `num_std=3`, `lam=1e4`, `scale=5` (function signatures)
+  - Default wavelength cutoff: `um_cut=27.5` μm (line 60)
+  - SNR threshold: `n_sigma=5` (lines 120, 195)
+  - Background box size: `(1, shape[1]/2)` for stripe correction
+  - FABC algorithm parameters in baseline fitting
+
+- **Questionable Parts:**
+  - Line 27: "WARNING, this function is in development! It does not calculate the spectral index correctly."
+  - Lines 65-67 and 77-78: Hardcoded RA/Dec for L1448MM1 - source-specific coordinates embedded in general function
+  - Line 81: Conditional `if (1):` blocks for plotting - should be flag-controlled
+  - Lines 106-117: Another `if (0):` block for optional plotting - dead code
+  - Spectral index calculation documented as incorrect but still present
+  - Limited error handling in `automatic_continuum_cube()` try/except block (line 86)
+  - Method 'AUTOMATIC' in `get_cont_cube()` raises NotImplementedError (line 152)
+
+- **Dependencies:**
+  - ifu_analysis.jdfitting (fit_linear_slope)
+  - ifu_analysis.jdutils (unpack_hdu, get_subcube_name, get_JWST_IFU_um)
+  - pandas
+  - numpy
+  - spectres
+  - tqdm
+  - scipy.signal (savgol_filter)
+  - matplotlib.pyplot
+  - pybaselines (Baseline)
+  - astropy.io.fits
+  - astropy.wcs (WCS)
+  - astropy.units
+  - astropy.coordinates (SkyCoord)
+
+- **Status:** Documented | Source-Specific Code Needs Removal
+
+---
+
+### extract_spectra.py
+
+- **Name:** `extract_spectra.py`
+- **Type:** Workflow Script
+- **Purpose:** Main spectrum extraction workflow that processes multiple apertures across all 12 MIRI MRS bands. Handles different spectra types (BASE, BASE_CONT, PSFSUB, PSFSUB_CONT, PSFMODEL), performs stitching, and generates diagnostic plots. This is a user-facing script with configurable parameters.
+
+- **Key Workflow Steps:**
+  1. Read aperture definitions from INI file
+  2. For each spectra type to process:
+     - Find all 12 band files in specified folder
+     - Validate all bands are present
+     - For each aperture:
+       - Extract unstitched spectra using pipeline or naive method
+       - Stitch overlapping wavelength regions
+       - Merge into continuous spectrum
+       - Save to .spectra format
+       - Generate diagnostic plots (unstitched & stitched)
+
+- **User-Defined Parameters (Lines 15-56):**
+  - `source_name` - Source identifier (default: 'BHR71')
+  - `do_flooring` - Set low flux to 3σ level (default: False)
+  - `do_zero_pointing` - Apply zero-point correction (default: False)
+  - `spectral_extraction_method` - 'NAIVE' or 'PIPELINE' (default: 'PIPELINE')
+  - `spectra_types_to_process` - List of types to process (e.g., ['PSFSUB', 'BASE', 'PSFMODEL'])
+  - `spectra_input_folders` - Dictionary mapping types to folder paths
+  - `base_output_folder` - Where to save extracted spectra
+  - `aperture_filename` - Path to aperture definition file
+  - `fn_band_arr` - List of 12 band names (ch1-short through ch4-long)
+
+- **Helper Functions:**
+  - `check_existing_files(output_folder, source_name, aper_names)` - Prompt user before overwriting
+  - `get_filenames_for_spectra_type(which_spectra, ...)` - Find and validate 12 band files
+
+- **Hardcoded Elements:**
+  - **CRITICAL:** Example input folder paths (lines 46-52):
+    - All pointing to `/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_post_processing/`
+  - **CRITICAL:** Example output folder (line 55):
+    - `/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/BHR71/ifualign/PSF_Subtraction/spectra/`
+  - **CRITICAL:** Example aperture file (line 58):
+    - `/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/input-files/aperture-ini-%s.txt`
+  - Wavelength cutoff for plotting: 27.5 μm (line 133) and 27 μm (line 147)
+  - Figure sizes: (16, 4) for diagnostic plots (lines 130, 144)
+  - Plot DPI: 300 (lines 141, 155)
+  - Plot format: .jpg (lines 141, 155)
+  - Number of expected bands: 12 (hardcoded validation)
+
+- **Questionable Parts:**
+  - Lines 130-141 and 144-155: Conditional plotting blocks with `if (1):` - should be flag-controlled
+  - Different wavelength cutoffs for unstitched (27.5) vs stitched (27) plots - inconsistent
+  - Source name 'BHR71' in default but example paths point to 'L1448MM1'
+  - Saving both unstitched and stitched formats but comment says "merged spectra gives a problem with saving"
+  - No validation that input folders exist before starting processing
+  - File finding logic prefers first match when multiple files exist (line 110)
+
+- **Dependencies:**
+  - ifu_analysis.jdspextract (unstitched_spectrum_from_cube_list, stitch_subcubes, merge_subcubes, save_spectra)
+  - ifu_analysis.jdutils (read_aperture_ini, get_subcube_name)
+  - ifu_analysis.jdcontinuum (get_cont_cube)
+  - astropy.wcs (WCS)
+  - glob
+  - os, os.path
+  - scipy.ndimage (median_filter)
+  - matplotlib.colors (LogNorm)
+  - matplotlib.pyplot
+  - numpy
+
+- **Status:** Documented | Needs Configuration File
+
+---
+
+### stripe_correction.py
+
+- **Name:** `stripe_correction.py`
+- **Type:** Workflow Script
+- **Purpose:** Apply stripe/background correction to JWST MIRI MRS cubes affected by cosmic ray shower artifacts. Processes all 12 bands, generates continuum cubes, creates masks, applies stripe correction, and saves corrected products.
+
+- **Key Workflow Steps:**
+  1. For each of 12 MIRI MRS bands:
+     - Load IFU cube
+     - Generate automatic continuum cube using FABC algorithm
+     - Create SNR-based mask (continuum < 5σ)
+     - Apply stripe correction using weighted background subtraction
+     - Save: stripe-corrected data, background model, continuum cube, corrected continuum
+
+- **User-Defined Parameters:**
+  - `output_foldername` - Where to save all outputs (line 17)
+  - `saveto_plots` - Where to save diagnostic plots (line 18)
+  - Input cube path template (line 24)
+  - Output filename templates (lines 26-29)
+
+- **Hardcoded Elements:**
+  - **CRITICAL:** Source-specific paths (line 17-18, 24):
+    - `/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/continuum_RADEC/`
+    - `/home/vorsteja/Documents/JOYS/JWST_cubes/L1448MM1/L1448-mm_%s_s3d_LSRcorr.fits`
+  - **CRITICAL:** Source name hardcoded in filenames: 'L1448-mm' (lines 26-29)
+  - Band definitions: hardcoded list of 12 bands (lines 13-15)
+  - Commented-out aperture masking code (lines 36-42) - suggests alternative masking approach
+  - SNR threshold: `n_sigma = 5` (line 33)
+  - Continuum masking logic: `cont_cube[cont_cube > n_sigma*unc_cont_cube] = np.nan` (line 33)
+
+- **Questionable Parts:**
+  - Lines 36-42: Large commented-out block for aperture-based masking - dead code
+  - No loop over multiple sources - hardcoded for single source
+  - No validation that output directory exists
+  - No error handling if subchannel processing fails
+  - Unclear why continuum is both generated and stripe-corrected separately
+  - The masking approach inverts SNR logic (masks high SNR instead of low)
+
+- **Dependencies:**
+  - ifu_analysis.jdpsfsub (stripe_correction)
+  - ifu_analysis.jdutils (get_JWST_PSF, define_circular_aperture, unpack_hdu, get_JWST_IFU_um, get_subcube_name)
+  - ifu_analysis.jdcontinuum (automatic_continuum_cube)
+  - astropy.io.fits
+  - astropy.wcs (WCS)
+  - numpy
+  - matplotlib.pyplot
+  - pybaselines (Baseline)
+  - tqdm
+
+- **Status:** Documented | Single-Source Script - Needs Generalization
+
+---
+
+## 2. Workflow Diagrams
+
+### Complete Spectrum Extraction Pipeline
+
+```
+[User Defines Parameters] (extract_spectra.py)
+       ↓
+[Read Aperture Definitions] (jdutils: read_aperture_ini)
+       ↓
+[Find Band Files] × 12 bands (extract_spectra.py: get_filenames_for_spectra_type)
+       ↓
+FOR EACH APERTURE:
+       ↓
+[Extract Spectra] (jdspextract: unstitched_spectrum_from_cube_list)
+       ├─ [Pipeline Method] (jdspextract: jpipe_extract_spectrum)
+       └─ [Naive Method] (jdspextract: extract_spectrum)
+       ↓
+[Stitch Overlapping Regions] (jdspextract: stitch_subcubes)
+       ↓
+[Merge to Continuous Spectrum] (jdspextract: merge_subcubes)
+       ↓
+[Save Results] (jdspextract: save_spectra)
+       ↓
+[Generate Diagnostic Plots] (matplotlib)
+```
+
+### Stripe Correction + Continuum Pipeline
+
+```
+[User Defines Paths] (stripe_correction.py)
+       ↓
+FOR EACH OF 12 BANDS:
+       ↓
+[Load Cube] (jdutils: unpack_hdu)
+       ↓
+[Generate Continuum Cube] (jdcontinuum: automatic_continuum_cube)
+       ├─ FOR EACH PIXEL:
+       │    ├─ [Fit Baseline] (pybaselines: FABC)
+       │    └─ [Mask Lines]
+       ↓
+[Create SNR Mask]
+       ↓
+[Apply Stripe Correction] (jdpsfsub: stripe_correction)
+       ↓
+[Save Products]
+       ├─ Stripe-corrected cube
+       ├─ Background model
+       ├─ Continuum cube
+       └─ Corrected continuum cube
+```
+
+### Line Extraction Pipeline
+
+```
+[Choose Subchannel] (jdlines: choose_subchannel)
+       ↓
+[Load Cube] (jdutils: unpack_hdu)
+       ↓
+[Extract Line Cube] (jdlines: get_line_cube)
+       ├─ FOR EACH PIXEL:
+       │    ├─ [Interpolate NaNs] (jdutils: interpolate_nan)
+       │    ├─ [Fit Baseline] (pybaselines: pspline_arpls)
+       │    ├─ [Subtract Continuum]
+       │    └─ [Optional: Fit Gaussian]
+       ↓
+[Convert to Velocity] (jdlines: um_to_vlsr)
+       ↓
+[Create Line Map] (jdlines: line_figure)
+```
+
+### Visualization Pipeline
+
+```
+[Load Data & WCS]
+       ↓
+[Create Figure Grid] (jdvis: generate_image_grid)
+       ↓
+[Display Images] (matplotlib: imshow)
+       ↓
+[Align Axes] (jdvis: align_axes)
+       ├─ [Get World Extent] (jdvis: get_image_world_extent)
+       └─ [Convert to Pixels] (jdvis: get_image_pixel_extent)
+       ↓
+[Annotate] (jdvis: annotate_imshow)
+       ├─ [Add WCS Labels]
+       ├─ [Add Beam]
+       ├─ [Add Scalebar]
+       └─ [Add Text Annotations]
+       ↓
+[Plot Apertures] (jdvis: plot_apertures)
+       ↓
+[Save Figure]
+```
+
+---
+
+## 3. Plot Generation Log
+
+### Diagnostic Plots
+*For quality control, data validation, and intermediate checks*
+
+| Script | Plot Name/Type | Purpose | Output File/Format | Notes |
+|--------|---------------|---------|-------------------|-------|
+| extract_spectra.py | Unstitched spectra (lines 130-141) | Verify extraction per band | .jpg, 300 DPI | Active, controlled by if (1): |
+| extract_spectra.py | Stitched spectra (lines 144-155) | Verify stitching quality | .jpg, 300 DPI | Active, controlled by if (1): |
+| jdlines.py | Line fitting diagnostics (lines 143-161) | Debug Gaussian fits | Matplotlib show() | Active when fitting fails |
+| jdcontinuum.py | Continuum masking (lines 102-104) | Show baseline fit | .png, 200 DPI | Active for specific coords |
+| jdvis.py | SNR three-panel (make_snr_figures) | Moment map quality | User-specified | Function returns fig, axes |
+| jdvis.py | Unstitched spectra (plot_unstitched_spectra) | Multi-band comparison | Matplotlib show() | No auto-save |
+
+### Publication-Level Plots
+*Final figures for papers, presentations, or reports*
+
+| Script | Figure Description | Output File/Format | Customization Needed | Status |
+|--------|-------------------|-------------------|---------------------|--------|
+| jdvis.py | Annotated images | User-specified | Full WCS annotation | Implemented |
+| jdvis.py | Multi-panel aligned images | User-specified | Grid layout | Implemented |
+| jdlines.py | Line intensity maps | User-specified | Basic maps | Partial |
+
+---
+
+## 4. Appendix: User-Configurable Variables
+
+### Target/Observation Parameters
+- **Coordinates:** 
+  - `RA_centre` (format: 'XXhXXmXX.XXs')
+  - `Dec_centre` (format: 'XXdXXmXX.XXs')
+- **Aperture size:** `aper_size` (arcsec)
+- **Source name:** Extracted from filename OR user-specified in workflow scripts
+
+### File Paths & Directories
+
+#### CRITICAL - Must Be Made Configurable:
+- **Input cube directory:**
+  - Currently: `/home/vorsteja/Documents/JOYS/JWST_cubes/L1448MM1/`
+  - Used in: stripe_correction.py (line 24)
+  
+- **Output directories:**
+  - Currently: `/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/`
+  - Used in: extract_spectra.py (lines 46-55), stripe_correction.py (line 17)
+  
+- **Input files directory:**
+  - Currently: `/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/input-files/`
+  - Used in: extract_spectra.py (line 58), jdfitting.py (absorption files)
+  
+- **Temporary directory:** 
+  - Currently: `/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/temp/`
+  - Used in: jdspextract.py (ASDF temp files)
+
+#### Source-Specific Hardcoded Values:
+- **L1448MM1 coordinates in jdcontinuum.py** (lines 65-67):
+  - `ra, dec = ['03h25m38.8898s','+30d44m05.612s']`
+  - `ra, dec = ['03h25m38.7708s','+30d44m08.823s']`
+  - **ACTION REQUIRED:** Remove from general function or make configurable
+
+### Analysis Parameters
+
+#### Spectral Extraction:
+- `spectral_extraction_method` - 'PIPELINE' or 'NAIVE' (default: 'PIPELINE')
+- `do_flooring` - Floor low flux values (default: False)
+- `do_zero_pointing` - Apply zero-point correction (default: False)
+- `bkg_sigma_clip` - Background sigma clipping (default: 10)
+
+#### Continuum Analysis:
+- `num_std` - Baseline fitting parameter (default: 3)
+- `lam` - Baseline smoothness parameter (default: 1e4)
+- `scale` - Baseline scale parameter (default: 5)
+- `um_cut` - Wavelength cutoff (default: 27.5 μm)
+- `n_sigma` - SNR threshold (default: 5)
+
+#### Line Analysis:
+- `N_chans` - Channels around line center
+- `N_sigma` - Line detection threshold (default: 5)
+- `lambda0` - Reference wavelength for velocity conversion
+- `store_type` - 'DATA' or 'MODEL' for line cubes
+
+#### Visualization:
+- `hide_ticks` - Hide axis tick labels (default: False)
+- `do_minor_ticks` - Show minor ticks (default: False)
+- `beam_fwhm` - Beam FWHM in arcsec (optional)
+- `linear_scale` - Physical scale for scalebar (AU)
+- `distance` - Source distance for scalebar (pc)
+- `contour_levels` - SNR contour levels
+- `contour_cmap` - Contour colormap (default: 'Greys_r')
+- `contour_alpha` - Contour opacity (default: 0.3)
+
+### File Naming Conventions
+
+**CRITICAL - These are assumed throughout:**
+- IFU cubes: `SOURCE_SUBCHANNEL_s3d_LSRcorr.fits`
+  - SOURCE: e.g., 'L1448-mm', 'BHR71'
+  - SUBCHANNEL: e.g., 'ch1-short', 'ch4-long'
+  - Example: `L1448-mm_ch1-short_s3d_LSRcorr.fits`
+
+- Subchannel names (12 total):
+  - ch1-short, ch1-medium, ch1-long
+  - ch2-short, ch2-medium, ch2-long
+  - ch3-short, ch3-medium, ch3-long
+  - ch4-short, ch4-medium, ch4-long
+
+- Aperture definition file: `aperture-ini-SOURCE.txt`
+  - Format: CSV with columns 'Name', 'Size(arcsec)', 'R.A.(J2000)', 'Dec.(J2000)'
+
+- Output spectra: `SOURCE_aperNAME.spectra` (JSON format)
+
+### External Dependencies
+
+#### Python Packages (Required):
+- **Core:** numpy, pandas, matplotlib
+- **Astronomy:** astropy, photutils
+- **JWST:** jwst (pipeline), stpsf (PSF modeling)
+- **Spectroscopy:** spectres, pybaselines
+- **Optimization:** scipy, lmfit
+- **Other:** tqdm (progress bars), glob, json, asdf
+
+#### Reference Data Files:
+- Absorption profiles (CSV format - see jdfitting.py documentation)
+- Optool dust opacity files
+- JWST PSF reference files (used by stpsf)
+- Line catalogs (tab-separated format for jdlines.py)
+
+#### Custom Modules:
+- **ifu_analysis.jdutils** - Core utilities (NOW DOCUMENTED)
+- **ifu_analysis.jdvis** - Visualization (NOW DOCUMENTED)
+- **ifu_analysis.jdlines** - Line analysis (NOW DOCUMENTED)
+- **ifu_analysis.jdcontinuum** - Continuum analysis (NOW DOCUMENTED)
+- **ifu_analysis.jdspextract** - Spectrum extraction (PREVIOUSLY DOCUMENTED)
+- **ifu_analysis.jdpsfsub** - PSF subtraction (PREVIOUSLY DOCUMENTED)
+- **ifu_analysis.jdfitting** - Spectral fitting (PREVIOUSLY DOCUMENTED)
+
+---
+
+## 5. Notes & Action Items
+
+### Critical Issues
+
+#### Immediate Action Required:
+
+1. **Hardcoded Paths - HIGHEST PRIORITY:**
+   - [ ] Remove all `/home/vorsteja/` paths
+   - [ ] Create configuration file (YAML or JSON) for:
+     - Input/output directories
+     - Temporary directory
+     - Reference data directory
+   - [ ] Update all scripts to read from config
+
+2. **Source-Specific Code in General Functions:**
+   - [ ] Remove L1448MM1 coordinates from `jdcontinuum.py` (lines 65-67)
+   - [ ] Make diagnostic plotting coordinates user-configurable
+   - [ ] Generalize `stripe_correction.py` to handle any source
+
+3. **File Naming Assumptions:**
+   - [ ] Document required naming convention clearly
+   - [ ] Add validation/error messages when files don't match convention
+   - [ ] Consider making naming pattern configurable
+
+#### Data Quality & Validation:
+
+4. **Questionable Code Sections:**
+   - [ ] Verify velocity conversion formula in `jdlines.py` (line 19)
+   - [ ] Fix spectral index calculation in `jdcontinuum.py` (line 27)
+   - [ ] Test and document `get_image_pixel_extent()` in `jdvis.py` (line 76)
+   - [ ] Complete docstring for `annotate_imshow()` in `jdvis.py` (line 119)
+
+5. **Missing Error Handling:**
+   - [ ] Add file existence checks before processing
+   - [ ] Validate FITS header contents in `get_JWST_IFU_um()`
+   - [ ] Handle failed Gaussian fits more gracefully in `jdlines.py`
+   - [ ] Add try/except around file I/O operations
+
+### Refactoring Opportunities
+
+#### High Priority:
+
+6. **Configuration System:**
+   ```yaml
+   # Proposed config.yaml structure
+   paths:
+     input_cubes: /path/to/cubes/
+     output_base: /path/to/outputs/
+     temp_dir: /path/to/temp/
+     reference_data: /path/to/absorption_files/
+   
+   analysis:
+     continuum:
+       num_std: 3
+       lam: 1e4
+       scale: 5
+       um_cut: 27.5
+       n_sigma: 5
+     lines:
+       detection_sigma: 5
+       n_channels: 10
+     extraction:
+       method: PIPELINE  # or NAIVE
+       bkg_sigma_clip: 10
+   
+   source:
+     name: L1448MM1
+     coordinates:
+       ra: "03h25m38.8898s"
+       dec: "+30d44m05.612s"
+     distance_pc: 293
+   
+   plotting:
+     diagnostic: true
+     save_format: png
+     dpi: 300
+   ```
+
+7. **Code Cleanup:**
+   - [ ] Remove all `if (1):` and `if (0):` blocks
+   - [ ] Replace with proper boolean flags
+   - [ ] Move commented-out code to examples or delete
+   - [ ] Standardize print statements vs. logging
+
+8. **Function Signatures:**
+   - [ ] Reduce parameter count in `annotate_imshow()` (17 params → use kwargs dict)
+   - [ ] Standardize use of dictionaries vs. individual parameters
+   - [ ] Consider using dataclasses for configuration objects
+
+9. **Module Organization:**
+   - [ ] Create `config.py` for configuration management
+   - [ ] Create `plotting.py` separate from `jdvis.py` for publication figures
+   - [ ] Consider splitting `jdutils.py` into submodules (file_io, coordinates, apertures)
+
+#### Medium Priority:
+
+10. **Workflow Scripts:**
+    - [ ] Create master workflow script that calls extract_spectra.py and stripe_correction.py
+    - [ ] Add command-line argument parsing
+    - [ ] Create Jupyter notebook examples
+    - [ ] Add batch processing capabilities
+
+11. **Testing:**
+    - [ ] Create test suite with sample data
+    - [ ] Add unit tests for utility functions
+    - [ ] Validate against known good outputs
+    - [ ] Test with different source configurations
+
+12. **Documentation:**
+    - [ ] Create user guide with examples
+    - [ ] Add API documentation
+    - [ ] Document expected input formats
+    - [ ] Create troubleshooting guide
+
+### Missing Functionality
+
+13. **Feature Gaps:**
+    - [ ] Moment maps: Only order=0 implemented (need order=1, 2)
+    - [ ] Automatic quality assessment metrics
+    - [ ] Batch processing for multiple sources
+    - [ ] Interactive plot generation
+    - [ ] Uncertainty propagation validation throughout pipeline
+
+14. **Integration Needs:**
+    - [ ] Connect extract_spectra.py output to jdfitting.py
+    - [ ] Create end-to-end example workflow
+    - [ ] Add data validation at each pipeline stage
+
+### Questions to Resolve
+
+15. **Technical Clarifications:**
+    - [ ] Why is stitching only applied to CH4? (see jdspextract.py documentation)
+    - [ ] What determines base_factor and bfe_factor in PSF subtraction?
+    - [ ] Is the velocity conversion formula correct? (jdlines.py line 19)
+    - [ ] Why different wavelength cutoffs (27 vs 27.5 μm) in extract_spectra.py?
+    - [ ] Should spectral index calculation be fixed or removed? (jdcontinuum.py line 27)
+
+16. **Design Decisions:**
+    - [ ] Should we support non-LSR corrected cubes?
+    - [ ] Should we support different naming conventions?
+    - [ ] What's the best format for configuration (YAML, JSON, TOML)?
+    - [ ] Should plotting be separated into diagnostic vs. publication modules?
+
+---
+
+## 6. Module Dependency Graph
+
+```
+jdutils.py (CORE - no internal dependencies)
+    ↓
+    ├─→ jdvis.py
+    │     └─→ (uses: define_circular_aperture)
+    │
+    ├─→ jdlines.py  
+    │     └─→ (uses: get_JWST_IFU_um, interpolate_nan, unpack_hdu, 
+    │              get_subcube_name, get_JWST_PSF)
+    │
+    ├─→ jdcontinuum.py
+    │     └─→ (uses: unpack_hdu, get_subcube_name, get_JWST_IFU_um)
+    │     └─→ jdfitting.py (uses: fit_linear_slope)
+    │
+    ├─→ jdspextract.py
+    │     └─→ (uses: get_subcube_name, get_JWST_IFU_um, 
+    │              define_circular_aperture, read_aperture_ini)
+    │
+    └─→ jdpsfsub.py
+          └─→ (uses: get_JWST_PSF, define_circular_aperture, unpack_hdu,
+                   get_JWST_IFU_um, get_subcube_name)
+
+Workflow Scripts:
+    extract_spectra.py
+        └─→ jdspextract, jdutils, jdcontinuum
+    
+    stripe_correction.py
+        └─→ jdpsfsub, jdutils, jdcontinuum
+```
+
+---
+
+## 7. Pipeline Processing Order
+
+### Recommended Workflow:
+
+1. **Pre-processing (Optional):**
+   - Stripe correction on raw cubes → `stripe_correction.py`
+
+2. **Spectral Extraction:**
+   - Extract spectra from cubes → `extract_spectra.py`
+   - Outputs: Unstitched and stitched .spectra files
+
+3. **Continuum Analysis (if needed):**
+   - Generate continuum cubes → `jdcontinuum.automatic_continuum_cube()`
+   - Create integrated maps → `jdcontinuum.cont_integrated_map()`
+
+4. **Line Analysis (if needed):**
+   - Extract line cubes → `jdlines.get_line_cube()`
+   - Create line maps → `jdlines.line_figure()`
+
+5. **Spectral Fitting:**
+   - Prepare spectra → `jdfitting.prepare_spectra_for_fit()`
+   - Fit models → `jdfitting.fit_model()`
+   - Calculate goodness → `jdfitting.calculate_goodness_of_fit()`
+
+6. **Visualization:**
+   - Create publication figures → `jdvis.*` functions
+
+---
+
+**Document Version:** 2.0  
+**Date:** February 9, 2026  
+**Total Scripts Documented:** 9 / 9  
+**Status:** Complete documentation - Ready for refactoring implementation
+
+**Next Steps:**
+1. Create configuration file system
+2. Remove hardcoded paths and source-specific code
+3. Implement proper logging
+4. Add error handling
+5. Create test suite
+6. Write user guide
