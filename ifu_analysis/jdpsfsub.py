@@ -16,7 +16,7 @@ import pandas as pd
 from matplotlib.colors import LogNorm
 from photutils.background import MedianBackground,Background2D
 from pybaselines import Baseline
-from scipy.interpolate import CubicSpline
+from scipy.interpolate import CubicSpline, PchipInterpolator
 
 def Gauss2D_fit(data):
 	'''
@@ -227,7 +227,7 @@ def get_offset_uncertainties(um0,unc_map,aper_mask,scaling,Pixels_per_FWHM = 3):
 	unc_map = unc_map.copy()
 	unc_map[aper_mask==0] = np.nan
 	
-	mu = np.nanmean(unc_map) #Mean noise level in the aperture. 
+	mu = np.nanmedian(unc_map) #Mean noise level in the aperture. 
 	SNR = scaling/mu
 
 	FWHM = get_JWST_PSF(um0) #Get MIRI MRS FWHM from the Law et al. 2023 prescription.
@@ -239,6 +239,43 @@ def get_offset_uncertainties(um0,unc_map,aper_mask,scaling,Pixels_per_FWHM = 3):
 	dscaling = np.sqrt(2/rho2)
 
 	return dx_offset, dy_offset, dscaling
+
+def get_smooth_scatter(um, data_arr, smooth_arr, mask, window=25):
+	'''
+	Calculates the per-channel scatter of data around a smoothed baseline.
+	Masked regions (e.g. line channels) are interpolated over before computing
+	the rolling scatter, to avoid edge effects in the rolling window.
+
+	Parameters
+	----------
+	um : 1D array
+		Wavelengths in micron.
+	data_arr : 1D array
+		Data values (e.g. scaling, x_offset, y_offset).
+	smooth_arr : 1D array
+		Smoothed baseline values on the same wavelength grid.
+	mask : 1D boolean array
+		True for continuum channels, False for masked (line) channels.
+	window : int
+		Rolling window size in channels.
+
+	Returns
+	-------
+	dsmooth : 1D array
+		Per-channel scatter around the baseline.
+	'''
+	# Step 1: Residuals
+	residuals = data_arr - smooth_arr
+
+	# Step 2: Interpolate over masked regions
+	residuals_interp = residuals.copy()
+	residuals_interp[~mask] = np.interp(um[~mask], um[mask], residuals[mask])
+
+	# Step 3: Rolling scatter
+	dsmooth = pd.Series(residuals_interp).rolling(window=window, center=True, min_periods=window//2).std().values
+
+	return dsmooth
+
 
 def get_cube_offsets_scaling(um,data_cube,unc_cube,subband,mask_method,base_factor,aper_coords,wcs,saveto_psf_gen):
 	x_offset_arr = []
@@ -337,41 +374,45 @@ def get_cube_offsets_scaling(um,data_cube,unc_cube,subband,mask_method,base_fact
 
 	#Now the offset arrays become the baselines.
 	#We have to interpolate for the masked wavelengths.
-	cs_scaling = CubicSpline(um[mask_inds],scaling_baseline,extrapolate=False)
-	cs_xoffset = CubicSpline(um[mask_inds],xoffset_baseline,extrapolate=False)
-	cs_yoffset = CubicSpline(um[mask_inds],yoffset_baseline,extrapolate=False)
+	cs_scaling = PchipInterpolator(um[mask_inds],scaling_baseline,extrapolate=False)
+	cs_xoffset = PchipInterpolator(um[mask_inds],xoffset_baseline,extrapolate=False)
+	cs_yoffset = PchipInterpolator(um[mask_inds],yoffset_baseline,extrapolate=False)
+
+
+	dsmooth_scaling  = get_smooth_scatter(um, scaling_arr,    cs_scaling(um), mask)
+	dsmooth_xoffset  = get_smooth_scatter(um, x_offset_arr,   cs_xoffset(um), mask)
+	dsmooth_yoffset  = get_smooth_scatter(um, y_offset_arr,   cs_yoffset(um), mask)
+
 
 	if (1):
 		pix_scale = get_pixel_scale(subband)
 		plt.figure(figsize = (16,9))
 		plt.subplot(131)
 		plt.plot(um,scaling_arr,alpha=0.3,label='data')
-		plt.scatter(um[mask],scaling_arr[mask],label='lines masked')
+		plt.errorbar(um[mask],scaling_arr[mask],yerr=dscaling_arr[mask],fmt='o',ms=3,color='steelblue',label='lines masked')
 		plt.plot(um[mask],scaling_baseline,color='red',label='baseline')
 		plt.plot(um,cs_scaling(um),color='green',label='interpolated baseline')
+		plt.fill_between(um,cs_scaling(um)-dsmooth_scaling,cs_scaling(um)+dsmooth_scaling,color='green',alpha=0.2)
 		plt.legend()
 		plt.title('scaling')
 		plt.subplot(132)
 		plt.plot(um,x_offset_arr/pix_scale,alpha=0.3,label='data')
-		plt.scatter(um[mask],x_offset_arr[mask]/pix_scale,label='lines masked')
+		plt.errorbar(um[mask],x_offset_arr[mask]/pix_scale,yerr=dx_offset_arr[mask]/pix_scale,fmt='o',ms=3,color='steelblue',label='lines masked')
 		plt.plot(um[mask],xoffset_baseline/pix_scale,color='red',label='baseline')
 		plt.plot(um,cs_xoffset(um)/pix_scale,color='green',label='interpolated baseline')
+		plt.fill_between(um,(cs_xoffset(um)-dsmooth_xoffset)/pix_scale,(cs_xoffset(um)+dsmooth_xoffset)/pix_scale,color='green',alpha=0.2)
 		plt.title('x-offset')
 		plt.legend()
 		plt.subplot(133)
 		plt.plot(um,y_offset_arr/pix_scale,alpha=0.3,label='data')
-		plt.scatter(um[mask],y_offset_arr[mask]/pix_scale,label='lines masked')
+		plt.errorbar(um[mask],y_offset_arr[mask]/pix_scale,yerr=dy_offset_arr[mask]/pix_scale,fmt='o',ms=3,color='steelblue',label='lines masked')
 		plt.plot(um[mask],yoffset_baseline/pix_scale,color='red',label='baseline')
 		plt.plot(um,cs_yoffset(um)/pix_scale,color='green',label='interpolated baseline')
+		plt.fill_between(um,(cs_yoffset(um)-dsmooth_yoffset)/pix_scale,(cs_yoffset(um)+dsmooth_yoffset)/pix_scale,color='green',alpha=0.2)
 		plt.title('y-offset')
 		plt.legend()
 		plt.savefig('/'.join(saveto_psf_gen.split('/')[:-1]) + '/psf_parameters_%s.png'%(subband),bbox_inches='tight',dpi=150)
 		plt.close()
-
-
-	scaling_arr = cs_scaling(um)
-	x_offset_arr = cs_xoffset(um)
-	y_offset_arr = cs_yoffset(um)
 
 
 	if saveto_psf_gen:
@@ -386,12 +427,34 @@ def get_cube_offsets_scaling(um,data_cube,unc_cube,subband,mask_method,base_fact
 		df['smooth_xoffset'] = cs_xoffset(um)
 		df['smooth_yoffset'] = cs_yoffset(um)
 		df['smooth_scaling'] = cs_scaling(um)
+		df['dsmooth_scaling'] = dsmooth_scaling
+		df['dsmooth_xoffset'] = dsmooth_xoffset
+		df['dsmooth_yoffset'] = dsmooth_yoffset
 		df['mask'] = mask
 		df.to_csv(saveto_psf_gen)
 
 
 	return x_offset_arr,y_offset_arr,scaling_arr,mask
 
+def get_options_csv_fn(output_foldername, source_name, fn_band):
+	'''
+	Returns the standard filename for the PSF options CSV file.
+
+	Parameters
+	----------
+	output_foldername : string
+		Output folder path.
+	source_name : string
+		Name of the source, e.g. 'L1448-mm'.
+	fn_band : string
+		Band filename string, e.g. 'ch3-short'.
+
+	Returns
+	-------
+	options_csv_fn : string
+		Filename of the options CSV.
+	'''
+	return output_foldername + '%s_%s_s3d_LSRcorr_stripecorr_psf_options.csv' % (source_name, fn_band)
 
 
 def generate_psf_cube(fn,subband,mask_method,mask_par,aper_coords = None,wcs = None,saveto_psf_gen=None,saveto_psf_cube=None,base_factor=1):
@@ -409,7 +472,9 @@ def generate_psf_cube(fn,subband,mask_method,mask_par,aper_coords = None,wcs = N
 	#Over each channel
 	for channel, (chan_map, unc_map) in enumerate(zip(data_cube,unc_cube)):	
 		print('Generating PSF cube: %d of %d'%(channel,len(data_cube)))
-
+		if channel >= len(x_offset_arr):
+			# Channels beyond the cutoff — leave as zero (no PSF to subtract)
+			continue
 		x_offset_arcsec,y_offset_arcsec,scaling = x_offset_arr[channel],y_offset_arr[channel],scaling_arr[channel]
 		
 		psf_woffset, pix_scale = generate_single_miri_mrs_psf(subband,channel,
@@ -528,6 +593,10 @@ def subtract_psf_cube(fn,subband,mask_method,mask_par,psf_filename = None,aper_c
 			print('Channel %d of %d'%(channel,len(data_cube)))
 		psf_map = psf_cube[channel]
 		psfsub_cube[channel] = chan_map - psf_map
+		
+		if channel >= len(mask):
+			# Beyond the um < 27 cutoff — no masking, no residual calculation
+			continue
 		
 		fwhm = (base_factor+bfe_factor)*get_JWST_PSF(um[channel])
 		RA, Dec = aper_coords
