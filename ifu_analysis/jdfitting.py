@@ -306,8 +306,10 @@ def blackbody(wav, temp,scaling):
 	radiance = 2*h*freq**3/(c**2) * (1/(np.exp(h*freq/(k*temp)))) # W m^2 sr-1 Hz-1
 	radiance = radiance/1e4 # W cm^2 sr^-1 Hz^-1
 	radiance = radiance*freq # W cm^2 sr^-1
-	apsize = 0.75
+
+	apsize = 0.75 #apsize in arcsec
 	area = apsize**2/4.25e10 # arcsec^2 --> sr
+
 	radiance = radiance*area # W cm^2
 	return radiance*scaling   
 

@@ -545,7 +545,7 @@ def stitch_subcubes(results, method='ADD',baseband = 'ch3-short'):
 	do_stitch_plot = False
 	if do_stitch_plot:
 		plt.close()
-		inds = np.where(np.array(results['subcube_name']) == 'ch3-short')[0][0]		
+		inds = np.where(np.array(results['subcube_name']) == baseband)[0][0]		
 		um_plot, flux_plot, unc_plot = [results[x][inds] for x in ['um', 'flux', 'flux_unc']]
 		plt.plot(um_plot,flux_plot,label='baseband')
 
@@ -595,7 +595,7 @@ def stitch_subcubes(results, method='ADD',baseband = 'ch3-short'):
 
 			if 'ch4' in name_pair:
 				print('Stitching is only being done for CH4!!')
-				new_results['flux'][indhigh] += factor
+			new_results['flux'][indhigh] += factor
 
 			print('name_pair: %s, factor: %.3E'%(name_pair,factor))
 

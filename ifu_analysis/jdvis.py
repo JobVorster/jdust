@@ -193,7 +193,7 @@ def annotate_imshow(ax,hdr,hide_ticks=False,do_minor_ticks=False,
 	beam_fwhm=None,RA_format = 'hh:mm:ss.ss',Dec_format = 'dd:mm:ss.s',
 	source_name=None,wavelength=None,img_type=None,fontdict={'va': 'center','ha': 'left','fontsize':12,'color':'white'},
 	linear_scale = None, distance = None,
-	add_colorbar=False,colorbar_label=None,dogrid=False,star_pos = None,cbar_fraction = 0.05):
+	add_colorbar=False,colorbar_label=None,dogrid=False,star_pos = None,cbar_fraction = 0.058):
 	'''
 	INSERT DOCSTRING HERE!!
 	'''
@@ -256,7 +256,7 @@ def annotate_imshow(ax,hdr,hide_ticks=False,do_minor_ticks=False,
 			annotate_str += img_type + '\n'
 
 		#Add annotation to the figure.
-		option = 'top_left'
+		option = 'bottom_left'
 		if option == 'top_left':
 			extent_perc = 0.2
 			xorigin = xlim[0]+0.3*extent_perc*xextent

@@ -218,10 +218,37 @@ def get_offsets(channel_map,unc_map,subband,spectral_channel,mask_method,mask_pa
 	return x_offset_arcsec, y_offset_arcsec
 
 
+def get_offset_uncertainties(um0,unc_map,aper_mask,scaling,Pixels_per_FWHM = 3):
+	'''
+	Calculates the statistical uncertainties on the PSF fitting via the estimates of J. J. Condon 1997 PASP 109 166.
+	'''
+
+	#Make sure it is masked correctly
+	unc_map = unc_map.copy()
+	unc_map[aper_mask==0] = np.nan
+	
+	mu = np.nanmean(unc_map) #Mean noise level in the aperture. 
+	SNR = scaling/mu
+
+	FWHM = get_JWST_PSF(um0) #Get MIRI MRS FWHM from the Law et al. 2023 prescription.
+
+	rho2 = (np.pi/(8*np.log(2))) * (Pixels_per_FWHM)**2 * (SNR)**2 #Condon 1997 Eq 20.
+
+	dx_offset = np.sqrt((2/rho2)*(FWHM**2/(8*np.log(2))))
+	dy_offset = np.sqrt((2/rho2)*(FWHM**2/(8*np.log(2))))
+	dscaling = np.sqrt(2/rho2)
+
+	return dx_offset, dy_offset, dscaling
+
 def get_cube_offsets_scaling(um,data_cube,unc_cube,subband,mask_method,base_factor,aper_coords,wcs,saveto_psf_gen):
 	x_offset_arr = []
 	y_offset_arr = []
 	scaling_arr = []
+
+	dx_offset_arr = []
+	dy_offset_arr = []
+	dscaling_arr = []
+
 
 	shp = np.shape(data_cube[0])
 	for channel, (chan_map,unc_map) in enumerate(zip(data_cube,unc_cube)):
@@ -237,73 +264,108 @@ def get_cube_offsets_scaling(um,data_cube,unc_cube,subband,mask_method,base_fact
 					RA, Dec = aper_coords
 					aper = define_circular_aperture(RA,Dec,fwhm)
 					mask_par = aper.to_pixel(wcs)
+					#This line creates a 2D boolean mask from the aperture.
+					#Method='center' makes sure the mask is just 0s and 1s, with no float values in between.
+					#To_image lets the mask have the same shape as the relevant image.
+					#dtype=int turns the 2D array of floats to an integer array, which acts as a boolean array.
+					#The last np.mod(Array+1,2) is to invert the array (1-->0, 0-->1).
 					aper_mask = np.mod(np.array(mask_par.to_mask(method='center').to_image(shp),dtype=int),2)
 			else:
 				print('No masking method other than APERTURE is supported.')
 			
-
+			
 			x_offset_arcsec, y_offset_arcsec = get_offsets(chan_map,unc_map,subband,channel,mask_method,mask_par)
 			w, model_data = Gauss2D_fit(chan_map)
 			scaling = w.amplitude.value
+
+			dx_offset, dy_offset, dscaling = get_offset_uncertainties(um[channel],unc_map,aper_mask,scaling,Pixels_per_FWHM = 3)
+
+
 			x_offset_arr.append(x_offset_arcsec)
 			y_offset_arr.append(y_offset_arcsec)
 			scaling_arr.append(scaling)
+
+			dx_offset_arr.append(dx_offset)
+			dy_offset_arr.append(dy_offset)
+			dscaling_arr.append(dscaling)
+
+
 		else:
 			x_offset_arr.append(np.nan)
 			y_offset_arr.append(np.nan)
 			scaling_arr.append(np.nan)
+			dx_offset_arr.append(np.nan)
+			dy_offset_arr.append(np.nan)
+			dscaling_arr.append(np.nan)
+
 
 	x_offset_arr = np.array(x_offset_arr)
 	y_offset_arr = np.array(y_offset_arr)
 	scaling_arr = np.array(scaling_arr)
+	dx_offset_arr = np.array(dx_offset_arr)
+	dy_offset_arr = np.array(dy_offset_arr)
+	dscaling_arr = np.array(dscaling_arr)
+
+
+	
 
 
 	#Line flagging.
 	#Do continuum classification on scaling array.
 	um_inds = np.where(um < 27)
+
+	um = um[um_inds]
+	x_offset_arr = x_offset_arr[um_inds]
+	y_offset_arr = y_offset_arr[um_inds]
+	scaling_arr = scaling_arr[um_inds]
+	dx_offset_arr = dx_offset_arr[um_inds]
+	dy_offset_arr = dy_offset_arr[um_inds]
+	dscaling_arr = dscaling_arr[um_inds]
+
+
 	lam,scale,num_std = 1e4,5,3
-	baseline_fitter = Baseline(um[um_inds], check_finite=True)
-	scaling_baseline, scaling_params = baseline_fitter.fabc(scaling_arr[um_inds], lam=lam,scale=scale,num_std=num_std)
+	baseline_fitter = Baseline(um, check_finite=True)
+	scaling_baseline, scaling_params = baseline_fitter.fabc(scaling_arr, lam=lam,scale=scale,num_std=num_std)
 	mask = scaling_params['mask']
 
 	mask_inds = np.where(mask == 1)
 	#Interpolation on the scaling, x-offset, y-offset.
-	baseline_fitter = Baseline(um[um_inds][mask_inds], check_finite=True)
-	scaling_baseline, scaling_params = baseline_fitter.fabc(scaling_arr[um_inds][mask_inds], lam = lam,scale=scale,num_std=num_std)
-	xoffset_baseline, xoffset_params = baseline_fitter.fabc(x_offset_arr[um_inds][mask_inds], lam = lam,scale=scale,num_std=num_std)
-	yoffset_baseline, yoffset_params = baseline_fitter.fabc(y_offset_arr[um_inds][mask_inds], lam = lam,scale=scale,num_std=num_std)
+	baseline_fitter = Baseline(um[mask_inds], check_finite=True)
+	scaling_baseline, scaling_params = baseline_fitter.fabc(scaling_arr[mask_inds], lam = lam,scale=scale,num_std=num_std)
+	xoffset_baseline, xoffset_params = baseline_fitter.fabc(x_offset_arr[mask_inds], lam = lam,scale=scale,num_std=num_std)
+	yoffset_baseline, yoffset_params = baseline_fitter.fabc(y_offset_arr[mask_inds], lam = lam,scale=scale,num_std=num_std)
 
 	#Now the offset arrays become the baselines.
 	#We have to interpolate for the masked wavelengths.
-	cs_scaling = CubicSpline(um[um_inds][mask_inds],scaling_baseline,extrapolate=False)
-	cs_xoffset = CubicSpline(um[um_inds][mask_inds],xoffset_baseline,extrapolate=False)
-	cs_yoffset = CubicSpline(um[um_inds][mask_inds],yoffset_baseline,extrapolate=False)
+	cs_scaling = CubicSpline(um[mask_inds],scaling_baseline,extrapolate=False)
+	cs_xoffset = CubicSpline(um[mask_inds],xoffset_baseline,extrapolate=False)
+	cs_yoffset = CubicSpline(um[mask_inds],yoffset_baseline,extrapolate=False)
 
 	if (1):
 		pix_scale = get_pixel_scale(subband)
 		plt.figure(figsize = (16,9))
 		plt.subplot(131)
 		plt.plot(um,scaling_arr,alpha=0.3,label='data')
-		plt.scatter(um[um_inds][mask],scaling_arr[um_inds][mask],label='lines masked')
-		plt.plot(um[um_inds][mask],scaling_baseline,color='red',label='baseline')
+		plt.scatter(um[mask],scaling_arr[mask],label='lines masked')
+		plt.plot(um[mask],scaling_baseline,color='red',label='baseline')
 		plt.plot(um,cs_scaling(um),color='green',label='interpolated baseline')
 		plt.legend()
 		plt.title('scaling')
 		plt.subplot(132)
 		plt.plot(um,x_offset_arr/pix_scale,alpha=0.3,label='data')
-		plt.scatter(um[um_inds][mask],x_offset_arr[um_inds][mask]/pix_scale,label='lines masked')
-		plt.plot(um[um_inds][mask],xoffset_baseline/pix_scale,color='red',label='baseline')
+		plt.scatter(um[mask],x_offset_arr[mask]/pix_scale,label='lines masked')
+		plt.plot(um[mask],xoffset_baseline/pix_scale,color='red',label='baseline')
 		plt.plot(um,cs_xoffset(um)/pix_scale,color='green',label='interpolated baseline')
 		plt.title('x-offset')
 		plt.legend()
 		plt.subplot(133)
 		plt.plot(um,y_offset_arr/pix_scale,alpha=0.3,label='data')
-		plt.scatter(um[um_inds][mask],y_offset_arr[um_inds][mask]/pix_scale,label='lines masked')
-		plt.plot(um[um_inds][mask],yoffset_baseline/pix_scale,color='red',label='baseline')
+		plt.scatter(um[mask],y_offset_arr[mask]/pix_scale,label='lines masked')
+		plt.plot(um[mask],yoffset_baseline/pix_scale,color='red',label='baseline')
 		plt.plot(um,cs_yoffset(um)/pix_scale,color='green',label='interpolated baseline')
 		plt.title('y-offset')
 		plt.legend()
-		plt.savefig('./psf_parameters_%s.png'%(subband),bbox_inches='tight',dpi=150)
+		plt.savefig('/'.join(saveto_psf_gen.split('/')[:-1]) + '/psf_parameters_%s.png'%(subband),bbox_inches='tight',dpi=150)
 		plt.close()
 
 
@@ -313,11 +375,17 @@ def get_cube_offsets_scaling(um,data_cube,unc_cube,subband,mask_method,base_fact
 
 
 	if saveto_psf_gen:
-		df = pd.DataFrame(columns =['um','x_offset','y_offset','scaling','mask'])
+		df = pd.DataFrame(columns =['um','fit_xoffset','dfit_xoffset','fit_yoffset','dfit_yoffset','fit_scaling','dfit_scaling','smooth_xoffset','smooth_yoffset','smooth_scaling','mask'])
 		df['um'] = um
-		df['x_offset'] = x_offset_arr
-		df['y_offset'] = y_offset_arr
-		df['scaling'] = scaling_arr
+		df['fit_xoffset'] = x_offset_arr
+		df['dfit_xoffset'] = dx_offset_arr
+		df['fit_yoffset'] = y_offset_arr
+		df['dfit_yoffset'] = dy_offset_arr
+		df['fit_scaling'] = scaling_arr
+		df['dfit_scaling'] = dscaling_arr
+		df['smooth_xoffset'] = cs_xoffset(um)
+		df['smooth_yoffset'] = cs_yoffset(um)
+		df['smooth_scaling'] = cs_scaling(um)
 		df['mask'] = mask
 		df.to_csv(saveto_psf_gen)
 
@@ -474,6 +542,28 @@ def subtract_psf_cube(fn,subband,mask_method,mask_par,psf_filename = None,aper_c
 
 		#Only save the residuals for continuum channels. Line channels arbitrarily increase it, and modifies the statistics.
 
+		#This plots the channel maps, the psf and the psfsubtracted for debugging.
+		if (1):	
+			if channel == 30:
+				vmax = np.nanmax(psfsub_cube[channel])
+				vmin = -0.05*vmax
+				fn_sub = '/'.join(saveto_psf_gen.split('/')[:-1]) + '/psf_sub_%s.png'%(subband)
+				plt.close()
+				plt.figure(figsize=(16,6))
+				plt.subplot(131)
+				plt.imshow(chan_map,vmin=vmin,vmax=vmax,cmap='gist_stern',origin='lower')
+				plt.title('%s Channel Map'%(subband))
+				plt.colorbar(location='bottom',fraction=0.046)
+				plt.subplot(132)
+				plt.imshow(psf_map,vmin=vmin,vmax=vmax,cmap='gist_stern',origin='lower')
+				plt.title('%s PSF Model'%(subband))
+				plt.colorbar(location='bottom',fraction=0.046)
+				plt.subplot(133)
+				plt.title('%s PSF Subtracted'%(subband))
+				plt.imshow(psfsub_cube[channel],vmin=vmin,vmax=vmax,cmap='gist_stern',origin='lower')
+				plt.colorbar(location='bottom',fraction=0.046)
+				plt.savefig(fn_sub,dpi = 200, bbox_inches = 'tight')
+		
 		if mask[channel] == True:
 			residual_channels += [channel]*len(psfsub_cube[channel][aper_mask_bfe==1]/psf_map[aper_mask_bfe==1])
 			#Residual with the fwhm only.	
@@ -488,29 +578,12 @@ def subtract_psf_cube(fn,subband,mask_method,mask_par,psf_filename = None,aper_c
 		if mask_psfsub:
 			psfsub_cube[channel][aper_mask_bfe==1] = np.nan
 
-		#This plots the channel maps, the psf and the psfsubtracted for debugging.
-		if (0):	
-			vmin = -0.05*scaling
-			vmax = np.nanmax(psfsub_cube[channel])
-			plt.close()
-			plt.figure(figsize=(16,6))
-			plt.subplot(131)
-			plt.imshow(chan_map,vmin=vmin,vmax=vmax,cmap='gist_stern',origin='lower')
-			plt.title('%s Channel Map'%(subband))
-			plt.colorbar(location='bottom',fraction=0.046)
-			plt.subplot(132)
-			plt.imshow(psf_map,vmin=vmin,vmax=vmax,cmap='gist_stern',origin='lower')
-			plt.title('%s PSF Model'%(subband))
-			plt.colorbar(location='bottom',fraction=0.046)
-			plt.subplot(133)
-			plt.title('%s PSF Subtracted'%(subband))
-			plt.imshow(psfsub_cube[channel],vmin=vmin,vmax=vmax,cmap='gist_stern',origin='lower')
-			plt.colorbar(location='bottom',fraction=0.046)
-			plt.show()
+		
 
-
+	plt.close()
+	fn_residuals = '/'.join(saveto_psf_gen.split('/')[:-1]) + '/psf_residuals_%s.png'%(subband)
 	plt.scatter(residual_channels,fwhm_residual,s=0.1)
-	plt.show()
+	plt.savefig(fn_residuals,dpi = 200, bbox_inches = 'tight')
 
 
 	#Turn this into a plot where you show the average residual per subchannel.
