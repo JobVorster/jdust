@@ -45,6 +45,8 @@ aperture_filename = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/input-file
 fn_band_arr = ['ch1-short', 'ch1-medium', 'ch1-long', 'ch2-short', 'ch2-medium', 'ch2-long',
                'ch3-short', 'ch3-medium', 'ch3-long', 'ch4-short', 'ch4-medium', 'ch4-long']
 
+baseband = 'ch3-short'
+
 # ============================================================================
 # END USER-DEFINED PARAMETERS
 # ============================================================================
@@ -197,7 +199,7 @@ for which_spectra in spectra_types_to_process:
 			plt.savefig(output_foldername + '%s_aper%s_spectrum_unstitched.jpg' % (source_name, aper_name), dpi=300, bbox_inches='tight')
 		
 		print('Aperture: %s, which_spectra: %s' % (aper_name, which_spectra))
-		results_stitched = stitch_subcubes(results)
+		results_stitched = stitch_subcubes(results,baseband =baseband)
 		results_merged = merge_subcubes(results_stitched, do_zero_pointing=do_zero_pointing)
 		save_spectra(results, output_foldername + '%s_aper%s_unstitched.spectra' % (source_name, aper_name))
 		

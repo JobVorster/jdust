@@ -34,9 +34,14 @@ def cavity_model_mfrac(wav,temp,scaling,temp2,scaling2,surface_density,Jv_Scale,
 	kabs = weighted_kappa(mfrac_arr,kabs_arr)
 	ksca = weighted_kappa(mfrac_arr,ksca_arr)
 
+	apsize = 0.75 #apsize in arcsec
+	area = apsize**2/4.25e10 # arcsec^2 --> sr
+
 	# Fix scattering temperature to 5000 K (not a free parameter)
 	Jv_T = 5000.0
 	F_source = blackbody(wav,Jv_T,Jv_Scale)
+
+	#F_source2 = 0*source_function(wav,temp,scaling,kabs,ksca,F_source)
 
 	#model = (source_function(wav,temp,scaling,kabs,ksca,F_source)+source_function(wav,temp2,scaling2,kabs,ksca,F_source)) * np.exp(-surface_density*(kabs+ksca))
 	model = source_function(wav,temp,scaling,kabs,ksca,F_source)* np.exp(-surface_density*(kabs+ksca)) + source_function(wav,temp2,scaling2,kabs,ksca,F_source)*(1-np.exp(-surface_density*(kabs+ksca)))
@@ -53,7 +58,7 @@ def source_function(wav,temp,scaling,kabs,ksca,F_source):
 
 opacity_foldername = '/home/vorsteja/Documents/JOYS/JDust/optool_opacities/'
 
-grain_species = ['olmg50','pyrmg70','for','ens']
+grain_species = ['olmg50','pyrmg70','for','ens'] 
 Nspecies = len(grain_species)
 grain_sizes = [0.1,1.5]
 Nsizes = len(grain_sizes)
@@ -86,28 +91,66 @@ for i,gsize in enumerate(grain_sizes):
 
 
 #Wavelength to fit.
-fit_wavelengths = [[4.7,5.67],[7.44,14.66],[16,27.5]]
+fit_wavelengths = [[4.7,14.66],[16,27.5]]
 
 
-source_name = 'L1448MM1'
+source_name = 'BHR71'
 aperture = 'B1'
 
 if source_name == 'L1448MM1':
+	#PSF Unsubtracted:
+	#input_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/spectra/BASE/'
+	#PSF Subtracted:
 	input_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/spectra/extracted_paper/'
 	output_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/cavity_modelling/'	
 	aperture_filename = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/input-files/aperture-ini-%s.txt'%(source_name)
+	fn_base = input_foldername + '/L1448MM1_aper%s.spectra'%(aperture)
+	sp_base = merge_subcubes(load_spectra(fn_base))
+	u_use,f_use,unc_use = [sp_base[x] for x in ['um', 'flux', 'flux_unc']]
+
+	if os.path.isfile(aperture_filename):
+		aper_names,aper_sizes,coord_list = read_aperture_ini(aperture_filename)
+
+if source_name == 'BHR71':
+	#PSF Unsubtracted:
+	#input_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/spectra/BASE/'
+	#PSF Subtracted:
+	input_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/spectra/extracted_paper_BHR71'
+	output_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/cavity_modelling/'	
+	aperture_filename = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/input-files/aperture-ini-%s.txt'%(source_name)
+	fn_base = input_foldername + '/%s_aper%s.spectra'%(source_name,aperture)
+	sp_base = merge_subcubes(load_spectra(fn_base))
+	u_use,f_use,unc_use = [sp_base[x] for x in ['um', 'flux', 'flux_unc']]
 
 	if os.path.isfile(aperture_filename):
 		aper_names,aper_sizes,coord_list = read_aperture_ini(aperture_filename)
 
 
+if source_name == 'BHR71_Lukasz':
+	input_foldername = '/home/vorsteja/Documents/JOYS/JDust/BHR71_scripts_12122025/BHR71_unc/BHR71/spectra_werrors/circle/1.00_arcsec/spectra_sci/'
+	fn_band_arr = ['ch1-short','ch1-medium','ch1-long','ch2-short','ch2-medium','ch2-long',
+				'ch3-short','ch3-medium','ch3-long','ch4-short','ch4-medium','ch4-long'] 
+	if aperture in  ['b1', 'b2', 'b3', 'b4', 'cr1', 'o5']:
+		fn_base = [input_foldername + 'BHR71-%s__circle_1.00_arcsec_%s_defringed.txt'%(aperture,x) for x in fn_band_arr]
+		um_base_arr = []
+		flux_base_arr = []
+		unc_base_arr = []
+		for fn in fn_base:
+			#Extract wavelengths, fluxes and uncertainties.
+			um_base,flux_base,unc_base = np.loadtxt(fn,delimiter=' ').T
+		
+			um_base_arr += list(um_base)
+			flux_base_arr += list(flux_base)
+			unc_base_arr += list(unc_base)
 
-fn_base = input_foldername + '/L1448MM1_aper%s.spectra'%(aperture)
-sp_base = merge_subcubes(load_spectra(fn_base))
-u_use,f_use,unc_use = [sp_base[x] for x in ['um', 'flux', 'flux_unc']]
+		u_use = np.array(um_base_arr)
+		f_use = np.array(flux_base_arr)
+		unc_use = np.array(unc_base_arr)
+
+source_name = source_name.split('_')[0]
 
 # Prepare spectrum for fit
-prepared_spectra = prepare_spectra_for_fit(u_use,f_use,unc_use,fit_wavelengths,um_cut=27.5)
+prepared_spectra = prepare_spectra_for_fit(u_use,f_use,unc_use,fit_wavelengths,um_cut=27.5,spectral_resolution=None)
 
 spectra_cols = ['um','flux','unc']
 fit_um,fit_flux,fit_unc = [prepared_spectra['fitdata:%s'%(x)] for x in spectra_cols]
@@ -132,7 +175,9 @@ mfrac_arr = np.zeros((len(grain_sizes),len(grain_species)))
 #														   #
 ############################################################
 
-best_fit_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/cavity_modelling/'
+best_fit_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/cavity_modelling/' #/MCMC_No_Jitter/
+#best_fit_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/cavity_modelling/MCMC_No_Jitter/' 
+
 fn = best_fit_foldername + 'summary_percentiles.csv'
 
 df = pd.read_csv(fn)

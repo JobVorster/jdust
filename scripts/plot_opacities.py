@@ -38,6 +38,7 @@ plt.rcParams.update({
     'legend.fontsize': 7
 })
 
+
 fig, axes = plt.subplots(4, 1, figsize=(3.5, 7), sharex=True, sharey=True)
 
 # Colors for grain sizes

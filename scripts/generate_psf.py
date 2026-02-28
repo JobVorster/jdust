@@ -51,13 +51,13 @@ fn_band_arr = ['ch3-short','ch3-medium']
 fn_arr = ['/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_post_processing/L1448-mm_%s_s3d_LSRcorr_stripecorr.fits'%(x) for x in fn_band_arr]
 cont_fn_arr = ['/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_post_processing/L1448-mm_%s_cont.fits'%(x) for x in fn_band_arr]
 SNR_percentile_arr = [99]*3 + [97.5]*3 
-output_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_post_processing/PSF_Subtraction/'
+output_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/PSFSub_Docs/L1448MM1/'
 
 
 
 
 dosave = True
-doplot = False
+doplot = True
 
 mask_method = 'APERTURE'
 mask_par = None

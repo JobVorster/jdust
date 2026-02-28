@@ -10,17 +10,26 @@ import emcee
 from ifu_analysis.jdspextract import load_spectra,merge_subcubes,read_aperture_ini
 from ifu_analysis.jdfitting import read_optool,fit_model,blackbody,prepare_spectra_for_fit,get_continuum_mask,results_to_terminal_str,grab_p0_bounds,calculate_goodness_of_fit
 from multiprocessing import Pool
+from scipy.interpolate import interp1d
 import corner
 import argparse
+import numpy as np 
+from spectres import spectres
+from scipy.interpolate import interp1d
 
-OKBLUE = '\033[94m'
-OKCYAN = '\033[96m'
-OKGREEN = '\033[92m'
-WARNING = '\033[93m'
-FAIL = '\033[91m'
-ENDC = '\033[0m'
-BOLD = '\033[1m'
-UNDERLINE = '\033[4m'
+def blackbody_intensity(wav, temp):
+	'''
+	Function by Katie Slavicinska.
+	'''
+	h = 6.626e-34 # W s^2
+	c = 2.998e8 # m s^-1
+	k = 1.381e-23 # J K^-1
+	wav = wav*1e-6 # um --> m
+	freq = c * 1/wav # m --> 1/s
+	radiance = 2*h*freq**3/(c**2) * (1/(np.exp(h*freq/(k*temp)))) # W m^2 sr-1 Hz-1
+	radiance = radiance/1e4 # W cm^2 sr^-1 Hz^-1
+	radiance = radiance*freq # W cm^2 sr^-1
+	return radiance   
 
 def regrid_kappas(wave,kappa_arr,new_wave):
 	Nsizes, Nspecies, _ = np.shape(kappa_arr)
@@ -32,17 +41,6 @@ def regrid_kappas(wave,kappa_arr,new_wave):
 			kregrid_arr[i][j] = kregrid
 	return kregrid_arr
 
-def cavity_model(wav,temp,scaling,temp2,scaling2,surface_density,Jv_T,Jv_Scale):
-	#Model CM
-	#Regrid to wav with spectres
-	kabs = spectres(wav,wave,kappa_abs)
-	ksca = spectres(wav,wave,kappa_scat)
-
-	F_source = blackbody(wav,Jv_T,Jv_Scale)
-
-	model = (source_function(wav,temp,scaling,kabs,ksca,F_source)+source_function(wav,temp2,scaling2,kabs,ksca,F_source)) * np.exp(-surface_density*(kabs+ksca))
-	return model
-
 def weighted_kappa(mfrac_arr,kappa_arr):
 	kappa_nu = np.zeros(np.shape(kappa_arr))[0][0] #kappa as a function of wavelength.
 	Nsizes, Nspecies = np.shape(mfrac_arr)
@@ -51,85 +49,245 @@ def weighted_kappa(mfrac_arr,kappa_arr):
 			kappa_nu += mfrac_arr[i][j]/np.sum(mfrac_arr.flatten())*kappa_arr[i][j]
 	return kappa_nu
 
-def cavity_model_mfrac(wav,temp,scaling,temp2,scaling2,surface_density,Jv_Scale,mfrac_arr,kabs_arr,ksca_arr):
+def cavity_model_mfrac(wav,temp,scaling,temp2,scaling2,surface_density,Jv_Scale,mfrac_arr,kabs_arr,ksca_arr,tau_ice=None):
 	#Model CM
-	
-	#Before optimisation, one has to regrid the kappas to the relevant grid.
-	#kappa_arr: Nsize x Nspecies x Nwave array of opacities.
-	#mfrac_arr: Nsize x Nspecies array of mass fractions.
+	#
+	# Geometry: point source --> warm slab (optically thick) --> cold slab --> observer
+	#
+	# kappa_arr : Nsize x Nspecies x Nwave array of opacities
+	# mfrac_arr : Nsize x Nspecies array of mass fractions
+	# tau_ice   : total ice optical depth on wav grid (sum_k N_k * sigma_k).
+	#             None means no ice. Ice enters only as extinction, no ice emission.
+	#
+	# Warm source function includes scattering from the point source (Jv_Scale).
+	# Cold source function is a pure blackbody because:
+	#   (1) The optically thick warm slab blocks the point source from the cold dust.
+	#   (2) The warm slab is geometrically compact (Omega_warm ~ 1e-5 of aperture),
+	#       so it subtends a negligible solid angle as seen from the cold dust and
+	#       does not significantly illuminate it via scattering.
+	# Both slabs are extincted by tau_total = tau_dust + tau_ice.
 
 	kabs = weighted_kappa(mfrac_arr,kabs_arr)
 	ksca = weighted_kappa(mfrac_arr,ksca_arr)
 
-	# Fix scattering temperature to 5000 K (not a free parameter)
-	Jv_T = 5000.0
-	F_source = blackbody(wav,Jv_T,Jv_Scale)
+	# Total optical depth of cold slab: dust + ice
+	tau_dust = surface_density * (kabs + ksca)
+	if tau_ice is None:
+		tau_total = tau_dust
+	else:
+		tau_total = tau_dust + tau_ice
 
-	#model = (source_function(wav,temp,scaling,kabs,ksca,F_source)+source_function(wav,temp2,scaling2,kabs,ksca,F_source)) * np.exp(-surface_density*(kabs+ksca))
-	model = source_function(wav,temp,scaling,kabs,ksca,F_source)* np.exp(-surface_density*(kabs+ksca)) + source_function(wav,temp2,scaling2,kabs,ksca,F_source)*(1-np.exp(-surface_density*(kabs+ksca)))
+	# Warm source function: thermal emission + scattering from point source
+	# Jv_Scale encodes the solid angle of the protostar as seen from the warm dust,
+	# the phase function and broadband extinction along that path.
+	Jv_T = 5000.0
+	F_source = blackbody_intensity(wav, Jv_T)*Jv_Scale
+	S_warm = source_function(wav, temp, kabs, ksca, F_source)
+
+	# Cold source function: pure blackbody, no scattering term
+	S_cold = blackbody_intensity(wav, temp2)
+
+	# Two-slab RT: warm slab behind, cold slab in front, both sharing tau_total
+	model = S_warm*scaling * np.exp(-tau_total) + S_cold*scaling2*(1 - np.exp(-tau_total))
 	return model
 
-def source_function(wav,temp,scaling,kabs,ksca,F_source):
-	return (kabs*blackbody(wav,temp,scaling) + ksca*F_source)/(kabs+ksca)
+def source_function(wav,temp,kabs,ksca,F_source):
+	return (kabs*blackbody_intensity(wav,temp) + ksca*F_source)/(kabs+ksca)
 
 
-############################################################
-#														   #	
-#	 PARSE COMMAND LINE ARGUMENTS						   #
-#														   #
-############################################################
-
-parser = argparse.ArgumentParser(description='Run MCMC dust composition fitting on MIRI MRS spectra')
-parser.add_argument('source_name', type=str, help='Source name (e.g., BHR71, L1448MM1)')
-parser.add_argument('aperture_name', type=str, help='Aperture name (e.g., b1, b2, A1, A2)')
-parser.add_argument('--model', type=str, default='CM', choices=['CM', 'CMWIND', 'CM_ANI'], 
-					help='Model type (default: CM)')
-
-args = parser.parse_args()
 
 ############################################################
 #														   #	
-#	 USER DEFINED PARAMETERS							   #
+#	 HELPER FUNCTIONS FOR MCMC							   #
 #														   #
 ############################################################
 
-distance_dict = {}
-distance_dict['L1448MM1'] = 293 #pc
-distance_dict['BHR71'] = 176 #pc
+def initialize_walkers(p0, nwalkers, ndim, bounds):
+	pos = []
+	
+	for i in range(nwalkers):
+		while True:
+			walker = np.zeros(ndim)
+			
+			for j in range(6):
+				param_range = bounds[list(bounds.keys())[j]][1] - bounds[list(bounds.keys())[j]][0]
+				perturbation = 0.1 * param_range * np.random.randn()
+				walker[j] = p0[j] + perturbation
+			
+			mfrac_independent = np.array(p0[6:6 + _n_mfrac_params])
+			mfrac_perturbed = mfrac_independent * (1 + 0.1 * np.random.randn(len(mfrac_independent)))
+			mfrac_perturbed = np.maximum(0, mfrac_perturbed)
+			
+			if np.sum(mfrac_perturbed) >= 1.0:
+				mfrac_perturbed *= 0.99 / np.sum(mfrac_perturbed)
+			
+			walker[6:6 + _n_mfrac_params] = mfrac_perturbed
 
-COL_WIDTH = 20#for terminal printing
+			# Perturb ice column densities around p0 values
+			if USE_ICE:
+				for k in range(Nice):
+					idx = 6 + _n_mfrac_params + k
+					lo, hi = _ice_N_bounds[k]
+					param_range = hi - lo
+					walker[idx] = p0[idx] + 0.1 * param_range * np.random.randn()
+					walker[idx] = np.clip(walker[idx], lo, hi)
+			
+			if np.isfinite(log_prior(walker)):
+				pos.append(walker)
+				break
+	
+	return np.array(pos)
 
-model_str = args.model
-source_name = args.source_name
-aperture_name = args.aperture_name
+def remove_outlier_chains(sampler, burnin, n_sigma=3):
+	log_prob = sampler.get_log_prob(discard=burnin, flat=False)
+	mean_log_prob_per_walker = np.mean(log_prob, axis=0)
+	
+	median = np.median(mean_log_prob_per_walker)
+	mad = np.median(np.abs(mean_log_prob_per_walker - median))
+	
+	mad_to_std = 1.4826
+	threshold = median - n_sigma * mad_to_std * mad
+	
+	good_walkers = mean_log_prob_per_walker > threshold
+	n_removed = np.sum(~good_walkers)
+	
+	print(f"\nOutlier chain removal:")
+	print(f"  Median log prob: {median:.2f}")
+	print(f"  MAD: {mad:.2f}")
+	print(f"  Threshold ({n_sigma}σ): {threshold:.2f}")
+	print(f"  Removing {n_removed}/{len(good_walkers)} outlier walkers")
+	
+	if n_removed > 0:
+		print(f"  Outlier walker indices: {np.where(~good_walkers)[0]}")
+	
+	chain = sampler.get_chain(discard=burnin, flat=False)
+	log_prob_chain = sampler.get_log_prob(discard=burnin, flat=False)
+	
+	flat_samples = chain[:, good_walkers, :].reshape(-1, chain.shape[2])
+	flat_log_prob = log_prob_chain[:, good_walkers].flatten()
+	
+	return flat_samples, flat_log_prob, n_removed
 
-print("\n" + "="*80)
-print(f"MCMC FITTING: {source_name} - Aperture {aperture_name}")
-print(f"Model: {model_str}")
-print("="*80 + "\n")
+def check_burn_in_adequacy(sampler, requested_burnin, param_names):
+	print("\n" + "="*80)
+	print("BURN-IN ADEQUACY CHECK")
+	print("="*80)
+	
+	try:
+		tau = sampler.get_autocorr_time(tol=0, quiet=True)
+		
+		max_tau = np.max(tau)
+		recommended_burnin = int(3 * max_tau)
+		
+		print(f"Autocorrelation times (in steps):")
+		for i, name in enumerate(param_names):
+			marker = " ⚠" if tau[i] == max_tau else ""
+			print(f"  {name:20s}: {tau[i]:8.1f}{marker}")
+		
+		print(f"\nMaximum autocorrelation time: {max_tau:.1f} steps")
+		print(f"Recommended burn-in (3 × max τ): {recommended_burnin} steps")
+		print(f"Actual burn-in used: {requested_burnin} steps")
+		
+		if recommended_burnin > requested_burnin:
+			print(WARNING + f"\n⚠ WARNING: Recommended burn-in ({recommended_burnin}) > actual ({requested_burnin})" + ENDC)
+			is_adequate = False
+		else:
+			print(OKGREEN + f"\n✓ Burn-in appears adequate ({requested_burnin} > {recommended_burnin})" + ENDC)
+			is_adequate = True
+			
+	except Exception as e:
+		print(f"Could not compute autocorrelation time: {e}")
+		recommended_burnin = requested_burnin
+		is_adequate = False
+	
+	print("="*80)
+	
+	return recommended_burnin, is_adequate
 
-kp5_filename = "/home/vorsteja/Documents/JOYS/Collaborator_Scripts/Sam_Extinction/KP5_benchmark_RNAAS.csv"
-opacity_foldername = '/home/vorsteja/Documents/JOYS/JDust/optool_opacities/'
+def print_mcmc_summary(flat_samples, flat_log_prob, param_names_sampled, param_names_all, n_data, ndim, n_removed=0):
+	print("\n" + "="*80)
+	print("MCMC SUMMARY")
+	print("="*80)
+	print(f"Total samples (after burn-in, thinning, outlier removal): {len(flat_samples)}")
+	if n_removed > 0:
+		print(f"Outlier walkers removed: {n_removed}")
+	
+	dof = n_data - ndim
+	chi2_red = -2 * flat_log_prob / dof
+	
+	print(f"\nReduced χ² statistics:")
+	print(f"  Median: {np.median(chi2_red):.3f}")
+	print(f"  Mean: {np.mean(chi2_red):.3f}")
+	print(f"  Std: {np.std(chi2_red):.3f}")
+	
+	print("\nParameter estimates (median ± 1σ):")
+	print("-"*80)
+	
+	for i, name in enumerate(param_names_all):
+		mcmc = np.percentile(flat_samples[:, i], [16, 50, 84])
+		q = np.diff(mcmc)
+		marker = " (dependent)" if i == len(param_names_all) - 1 else ""
+		print(f"{name:20s}: {mcmc[1]:12.6e} +{q[1]:12.6e} -{q[0]:12.6e}{marker}")
+	
+	print("="*80 + "\n")
 
-grain_species = ['olmg50','pyrmg70'] #,'for','ens'
-Nspecies = len(grain_species)
-grain_sizes = [0.1,1.5]
-Nsizes = len(grain_sizes)
-
-#Wavelength to fit.
-fit_wavelengths = [[4.7,5.67],[7.44,14.66],[16,27.5]]
-
-#Wavelength ranges to calculate reduced chi2
-chi_ranges = [[4.93,5.6],[7.7,8],[8.5,11.5],[12,14],[15.7,17],[19,20.5]]
-
-#If you want to regrid spectra to finer resolution before fitting. WARNING: This arbitrarily reduces uncertainties on measurments, giving over-accurate MCMC constraints.
-spectral_resolution = None 
 
 ############################################################
-#														   #	
-#	 MCMC PARAMETERS									   #
-#														   #
+#                                                          #
+#   ICE LOADING AND REGRIDDING                            #
+#                                                          #
 ############################################################
+
+def load_ice_absorbance(filename, input_units='wavenumber', delimiter=' ', comment='#'):
+	"""
+	Load a lab ice absorbance file and return wavelength in micron
+	and cross-section sigma in cm^2 molecule^-1.
+
+	Parameters
+	----------
+	filename    : str   path to absorbance file
+	input_units : str   'um' for micron, 'wavenumber' for cm^-1
+	delimiter   : str   column delimiter
+	comment     : str   comment character
+
+	Returns
+	-------
+	wav_um  : 1D array  wavelength in micron, monotonically increasing
+	sigma   : 1D array  cross-section in cm^2 molecule^-1
+	"""
+	data = np.loadtxt(filename, delimiter=delimiter if delimiter != ' ' else None,
+					  comments=comment)
+	col0 = data[:, 0]
+	sigma = data[:, 1]
+
+	if input_units == 'wavenumber':
+		# wavenumber (cm^-1) -> micron, reverses order
+		wav_um = 1e4 / col0
+	elif input_units == 'um':
+		wav_um = col0
+	else:
+		raise ValueError(f"ice_input_units must be 'um' or 'wavenumber', got '{input_units}'")
+	return wav_um, sigma
+
+def regrid_ice(wav_um, sigma, new_wave):
+	"""
+	Regrid ice cross-section onto new_wave using linear interpolation.
+	Outside the lab wavelength range the cross-section is set to zero
+	(no absorption where not measured).
+
+	Parameters
+	----------
+	wav_um   : 1D array  lab wavelength grid in micron
+	sigma    : 1D array  cross-section on lab grid
+	new_wave : 1D array  target wavelength grid in micron
+
+	Returns
+	-------
+	sigma_regridded : 1D array  cross-section on new_wave
+	"""
+	interp_func = interp1d(wav_um, sigma, kind='linear',
+						   bounds_error=False, fill_value=0.0)
+	return interp_func(new_wave)
 
 def load_initial_guess_from_csv(csv_foldername, source_name, aperture, n_samples=1000):
 	"""
@@ -196,8 +354,169 @@ def load_initial_guess_from_csv(csv_foldername, source_name, aperture, n_samples
 		print(f"Using default initial guess instead")
 		return None, None
 
+OKBLUE = '\033[94m'
+OKCYAN = '\033[96m'
+OKGREEN = '\033[92m'
+WARNING = '\033[93m'
+FAIL = '\033[91m'
+ENDC = '\033[0m'
+BOLD = '\033[1m'
+UNDERLINE = '\033[4m'
+
+############################################################
+#														   #	
+#	 PARSE COMMAND LINE ARGUMENTS						   #
+#														   #
+############################################################
+
+parser = argparse.ArgumentParser(description='Run MCMC dust composition fitting on MIRI MRS spectra')
+parser.add_argument('source_name', type=str, help='Source name (e.g., BHR71, L1448MM1)')
+parser.add_argument('aperture_name', type=str, help='Aperture name (e.g., b1, b2, A1, A2)')
+parser.add_argument('--model', type=str, default='CM', choices=['CM', 'CMWIND', 'CM_ANI'], 
+					help='Model type (default: CM)')
+
+args = parser.parse_args()
+
+############################################################
+#														   #	
+#	 USER DEFINED PARAMETERS							   #
+#														   #
+############################################################
+
+distance_dict = {}
+distance_dict['L1448MM1'] = 293 #pc
+distance_dict['BHR71'] = 176 #pc
+
+COL_WIDTH = 20#for terminal printing
+
+model_str = args.model
+source_name = args.source_name
+aperture_name = args.aperture_name
+
+print("\n" + "="*80)
+print(f"MCMC FITTING: {source_name} - Aperture {aperture_name}")
+print(f"Model: {model_str}")
+print("="*80 + "\n")
+
+kp5_filename = "/home/vorsteja/Documents/JOYS/Collaborator_Scripts/Sam_Extinction/KP5_benchmark_RNAAS.csv"
+opacity_foldername = '/home/vorsteja/Documents/JOYS/JDust/optool_opacities/'
+
+DO_CRYSTALS = False
+
+if DO_CRYSTALS:
+	grain_species = ['olmg50','pyrmg70','for','ens']
+else:
+	grain_species = ['olmg50','pyrmg70']
+Nspecies = len(grain_species)
+grain_sizes = [0.1,1.5]
+Nsizes = len(grain_sizes)
+
+#Wavelength to fit.
+fit_wavelengths = [[4.7,14.66],[16,27.5]]
+
+#Wavelength ranges to calculate reduced chi2
+chi_ranges = [[4.93,5.6],[7.7,8],[8.5,11.5],[12,14],[15.7,17],[19,20.5]]
+
+#If you want to regrid spectra to finer resolution before fitting. WARNING: This arbitrarily reduces uncertainties on measurments, giving over-accurate MCMC constraints.
+spectral_resolution = None 
+
+############################################################
+#														   #	
+#	 ICE PARAMETERS                                        #
+#                                                          #
+#   ice_species : list of strings, names for output       #
+#   ice_filenames : list of paths to lab absorbance files  #
+#                                                          #
+#   Expected file format (two columns, space or comma     #
+#   separated):                                            #
+#       col 0 : wavelength in micron OR wavenumber in     #
+#               cm^-1 (set ice_input_units below)         #
+#       col 1 : absorbance cross-section sigma in         #
+#               cm^2 molecule^-1 (per molecule)           #
+#                                                         #
+#   N_ice bounds (molecules cm^-2):                       #
+#       ice_N_lower : lower bound for all species         #
+#       ice_N_upper : upper bound for all species         #
+#       Override per-species in ice_N_bounds_dict below   #
+#                                                         #
+#   Set ice_species = [] to run without ice               #
+#                                                         #
+############################################################
+
+# Initial guess for ice column densities — physically motivated literature values
+# for Class I protostars (molecules cm^-2). Override per species as needed.
+p0_ice_defaults = {
+	'H2O 15K'  : 0.5,
+	'H2O 150K'  : 0.5
+}
+
+h2o_foldername = '/home/vorsteja/Documents/JOYS/Collaborator_Scripts/Contsub/'
+
+ice_species   = ['H2O 15K', 'H2O 150K']
+ice_filenames = [
+	h2o_foldername + '2023-08-18_hdo-h2o_1-200_thin(118)_154_blcorr.csv',
+	h2o_foldername + '2023-08-18_hdo-h2o_1-200_thin(27)_1500_blcorr.csv'
+]
+
+# Input wavelength units for each file: 'um' or 'wavenumber'
+ice_input_units = ['wavenumber', 'wavenumber']
+
+# Bounds
+ice_N_lower = 0.0
+ice_N_upper = 30
+
+# Per-species overrides — leave empty dict {} to use global bounds for all
+ice_N_bounds_dict = {
+	# 'H2O'  : [0.0, 1e19],
+	# 'CO2'  : [0.0, 5e17],
+	# 'CO'   : [0.0, 5e17],
+	# 'NH4+' : [0.0, 5e17],
+}
+
+# Delimiter for ice files (' ' for whitespace, ',' for csv, etc.)
+ice_file_delimiter = ','
+
+# Comment character in ice files
+ice_file_comment = '#'
+
+
+# Load all ice species
+ice_wav_list   = []   # lab wavelength grids
+ice_sigma_list = []   # lab cross-sections
+
+USE_ICE = len(ice_species) > 0
+Nice = len(ice_species)
+
+if USE_ICE:
+	print(f"\nLoading {Nice} ice species:")
+	for k, (name, fn, units) in enumerate(zip(ice_species, ice_filenames, ice_input_units)):
+		wav_ice, sigma_ice = load_ice_absorbance(fn, input_units=units,
+												 delimiter=ice_file_delimiter,
+												 comment=ice_file_comment)
+		ice_wav_list.append(wav_ice)
+		ice_sigma_list.append(sigma_ice)
+		print(f"  [{k}] {name:8s}  λ = {wav_ice.min():.2f} – {wav_ice.max():.2f} μm   "
+			  f"peak σ = {np.max(sigma_ice):.2e} cm²/mol   file: {fn}")
+	print()
+else:
+	print("\nNo ice species specified. Running without ice.\n")
+
+# Ice column density bounds per species
+ice_N_bounds = []
+for name in ice_species:
+	if name in ice_N_bounds_dict:
+		ice_N_bounds.append(ice_N_bounds_dict[name])
+	else:
+		ice_N_bounds.append([ice_N_lower, ice_N_upper])
+
+############################################################
+#														   #	
+#	 MCMC PARAMETERS									   #
+#														   #
+############################################################
+
 # MCMC settings
-NWALKERS = 32
+NWALKERS = 64
 NSTEPS = 700000
 NBURN = 200000
 THIN = 20
@@ -224,11 +543,11 @@ OUTLIER_SIGMA = 3
 p0_dict = {}
 
 p0_T1 = 70
-p0_O1 = 1e-2
+p0_O1 = 1e-6
 p0_T2 = 400
 p0_O2 = 1e-7
 p0_T_star = 5000
-p0_O_star = 1e-9
+p0_O_star = 1e-5
 p0_SD_LOS = 1e-3
 p0_SD_WIND = 1e-7
 p0_FF = 0.5
@@ -347,12 +666,16 @@ _bounds = None
 _Nsizes = Nsizes
 _Nspecies = Nspecies
 _n_mfrac_params = Nsizes * Nspecies - 1
+_rice_sigma_arr = None   # list of Nice arrays, each on fit_um grid — set after regridding
+_ice_N_bounds   = None   # list of [lower, upper] per species — set after regridding
+_tau_ice        = None   # ice optical depth array on fit_um grid — set after regridding
+_apsize = None
 
 def log_prior(theta):
 	theta = np.asarray(theta)
 	
 	temp, scaling, temp2, scaling2, surface_density, Jv_Scale = theta[:6]
-	mfrac_independent = theta[6:]
+	mfrac_independent = theta[6:6 + _n_mfrac_params]
 	
 	log_prob = 0.0
 	
@@ -388,29 +711,48 @@ def log_prior(theta):
 	mfrac_dependent = 1.0 - np.sum(mfrac_independent)
 	if mfrac_dependent < 0:
 		return -np.inf
-	
+
+	# Ice column density priors — uniform
+	if USE_ICE:
+		N_ice_params = theta[6 + _n_mfrac_params:]
+		for k, N_ice in enumerate(N_ice_params):
+			lo, hi = _ice_N_bounds[k]
+			if not (lo <= N_ice <= hi):
+				return -np.inf
+			else:
+				log_prob += -np.log(N_ice)
+
 	return log_prob
 
 def log_likelihood(theta):
 	theta = np.asarray(theta)
 	
 	temp, scaling, temp2, scaling2, surface_density, Jv_Scale = theta[:6]
-	mfrac_independent = theta[6:]
+	mfrac_independent = theta[6:6 + _n_mfrac_params]
 	
 	mfrac_dependent = 1.0 - np.sum(mfrac_independent)
 	mfrac_flat = np.append(mfrac_independent, mfrac_dependent)
 	mfrac_arr = mfrac_flat.reshape(_Nsizes, _Nspecies)
-	
+
+	# Build ice optical depth array from sampled column densities
+	if USE_ICE:
+		N_ice_params = theta[6 + _n_mfrac_params:]
+		tau_ice = np.zeros(len(_fit_um))
+		for k, N_ice in enumerate(N_ice_params):
+			tau_ice += N_ice * _rice_sigma_arr[k]
+	else:
+		tau_ice = np.zeros(len(_fit_um))
+
 	try:
 		model_eval = cavity_model_mfrac(_fit_um, temp, scaling, temp2, scaling2,
 										surface_density, Jv_Scale, mfrac_arr,
-										_rkabs_arr, _rksca_arr)
+										_rkabs_arr, _rksca_arr, tau_ice)
 	except:
 		return -np.inf
 	
 	if not np.all(np.isfinite(model_eval)):
 		return -np.inf
-	
+
 	residual = _fit_flux - model_eval
 	chi2 = np.sum(residual**2 / _fit_unc**2)
 	
@@ -427,131 +769,7 @@ def log_probability(theta):
 	
 	return lp + ll
 
-############################################################
-#														   #	
-#	 HELPER FUNCTIONS FOR MCMC							   #
-#														   #
-############################################################
 
-def initialize_walkers(p0, nwalkers, ndim, bounds):
-	pos = []
-	
-	for i in range(nwalkers):
-		while True:
-			walker = np.zeros(ndim)
-			
-			for j in range(6):
-				param_range = bounds[list(bounds.keys())[j]][1] - bounds[list(bounds.keys())[j]][0]
-				perturbation = 0.1 * param_range * np.random.randn()
-				walker[j] = p0[j] + perturbation
-			
-			mfrac_independent = np.array(p0[6:])
-			mfrac_perturbed = mfrac_independent * (1 + 0.1 * np.random.randn(len(mfrac_independent)))
-			mfrac_perturbed = np.maximum(0, mfrac_perturbed)
-			
-			if np.sum(mfrac_perturbed) >= 1.0:
-				mfrac_perturbed *= 0.99 / np.sum(mfrac_perturbed)
-			
-			walker[6:] = mfrac_perturbed
-			
-			if np.isfinite(log_prior(walker)):
-				pos.append(walker)
-				break
-	
-	return np.array(pos)
-
-def remove_outlier_chains(sampler, burnin, n_sigma=3):
-	log_prob = sampler.get_log_prob(discard=burnin, flat=False)
-	mean_log_prob_per_walker = np.mean(log_prob, axis=0)
-	
-	median = np.median(mean_log_prob_per_walker)
-	mad = np.median(np.abs(mean_log_prob_per_walker - median))
-	
-	mad_to_std = 1.4826
-	threshold = median - n_sigma * mad_to_std * mad
-	
-	good_walkers = mean_log_prob_per_walker > threshold
-	n_removed = np.sum(~good_walkers)
-	
-	print(f"\nOutlier chain removal:")
-	print(f"  Median log prob: {median:.2f}")
-	print(f"  MAD: {mad:.2f}")
-	print(f"  Threshold ({n_sigma}σ): {threshold:.2f}")
-	print(f"  Removing {n_removed}/{len(good_walkers)} outlier walkers")
-	
-	if n_removed > 0:
-		print(f"  Outlier walker indices: {np.where(~good_walkers)[0]}")
-	
-	chain = sampler.get_chain(discard=burnin, flat=False)
-	log_prob_chain = sampler.get_log_prob(discard=burnin, flat=False)
-	
-	flat_samples = chain[:, good_walkers, :].reshape(-1, chain.shape[2])
-	flat_log_prob = log_prob_chain[:, good_walkers].flatten()
-	
-	return flat_samples, flat_log_prob, n_removed
-
-def check_burn_in_adequacy(sampler, requested_burnin, param_names):
-	print("\n" + "="*80)
-	print("BURN-IN ADEQUACY CHECK")
-	print("="*80)
-	
-	try:
-		tau = sampler.get_autocorr_time(tol=0, quiet=True)
-		
-		max_tau = np.max(tau)
-		recommended_burnin = int(3 * max_tau)
-		
-		print(f"Autocorrelation times (in steps):")
-		for i, name in enumerate(param_names):
-			marker = " ⚠" if tau[i] == max_tau else ""
-			print(f"  {name:20s}: {tau[i]:8.1f}{marker}")
-		
-		print(f"\nMaximum autocorrelation time: {max_tau:.1f} steps")
-		print(f"Recommended burn-in (3 × max τ): {recommended_burnin} steps")
-		print(f"Actual burn-in used: {requested_burnin} steps")
-		
-		if recommended_burnin > requested_burnin:
-			print(WARNING + f"\n⚠ WARNING: Recommended burn-in ({recommended_burnin}) > actual ({requested_burnin})" + ENDC)
-			is_adequate = False
-		else:
-			print(OKGREEN + f"\n✓ Burn-in appears adequate ({requested_burnin} > {recommended_burnin})" + ENDC)
-			is_adequate = True
-			
-	except Exception as e:
-		print(f"Could not compute autocorrelation time: {e}")
-		recommended_burnin = requested_burnin
-		is_adequate = False
-	
-	print("="*80)
-	
-	return recommended_burnin, is_adequate
-
-def print_mcmc_summary(flat_samples, flat_log_prob, param_names_sampled, param_names_all, n_data, ndim, n_removed=0):
-	print("\n" + "="*80)
-	print("MCMC SUMMARY")
-	print("="*80)
-	print(f"Total samples (after burn-in, thinning, outlier removal): {len(flat_samples)}")
-	if n_removed > 0:
-		print(f"Outlier walkers removed: {n_removed}")
-	
-	dof = n_data - ndim
-	chi2_red = -2 * flat_log_prob / dof
-	
-	print(f"\nReduced χ² statistics:")
-	print(f"  Median: {np.median(chi2_red):.3f}")
-	print(f"  Mean: {np.mean(chi2_red):.3f}")
-	print(f"  Std: {np.std(chi2_red):.3f}")
-	
-	print("\nParameter estimates (median ± 1σ):")
-	print("-"*80)
-	
-	for i, name in enumerate(param_names_all):
-		mcmc = np.percentile(flat_samples[:, i], [16, 50, 84])
-		q = np.diff(mcmc)
-		marker = " (dependent)" if i == len(param_names_all) - 1 else ""
-		print(f"{name:20s}: {mcmc[1]:12.6e} +{q[1]:12.6e} -{q[0]:12.6e}{marker}")
-	
-	print("="*80 + "\n")
 
 ############################################################
 #														   #	
@@ -578,10 +796,21 @@ for i,gsize in enumerate(grain_sizes):
 	for j,gspecies in enumerate(grain_species):
 		param_names_all.append(f'{gspecies}-{gsize}um')
 
+# Add ice column density parameter names
+if USE_ICE:
+	for name in ice_species:
+		param_names_all.append(f'N_{name}')
+
 param_names_sampled = param_names_all[:6 + Nsizes*Nspecies - 1]
+if USE_ICE:
+	param_names_sampled += [f'N_{name}' for name in ice_species]
 
 # Process only the requested aperture
 aperture = aperture_name
+apsize = aper_sizes[np.where(aper_names==aperture)][0]
+
+arcsec2_to_ster = 2.35e-11
+aparea = np.pi*apsize**2*arcsec2_to_ster # arcsec^2 --> sr
 
 print("\n" + "="*80)
 print(f"PROCESSING: {source_name} - Aperture {aperture}")
@@ -626,15 +855,32 @@ prepared_spectra = prepare_spectra_for_fit(u_use,f_use,unc_use,fit_wavelengths,u
 spectra_cols = ['um','flux','unc']
 fit_um,fit_flux,fit_unc = [prepared_spectra['fitdata:%s'%(x)] for x in spectra_cols]
 
-#print('Number of channels with spectral resolution of %d is %d'%(spectral_resolution,len(fit_um)))
-#exit()
-
-
 u_use,f_rad,unc_rad = [prepared_spectra['unmasked:%s'%(x)] for x in spectra_cols]
+
+
+#Convert flux densities to surface brightness.
+f_rad /= aparea
+unc_rad /= aparea
+
+fit_flux /= aparea
+fit_unc /= aparea
 
 # Regrid opacities to fit wavelengths
 rkabs_arr = regrid_kappas(wave,kabs_arr,fit_um)
 rksca_arr = regrid_kappas(wave,ksca_arr,fit_um)
+
+# Regrid ice cross-sections to fit wavelengths
+if USE_ICE:
+	rice_sigma_arr = []
+	print("Regridding ice cross-sections to fit wavelength grid...")
+	for k, (name, wav_ice, sigma_ice) in enumerate(zip(ice_species, ice_wav_list, ice_sigma_list)):
+		sigma_regrid = regrid_ice(wav_ice, sigma_ice, fit_um)
+		rice_sigma_arr.append(sigma_regrid)
+		n_nonzero = np.sum(sigma_regrid > 0)
+		print(f"  {name:8s}: {n_nonzero}/{len(fit_um)} wavelength channels have non-zero absorbance")
+	print()
+else:
+	rice_sigma_arr = []
 
 ###############################
 # Set up MCMC
@@ -645,7 +891,8 @@ _fit_flux = fit_flux
 _fit_unc = fit_unc
 _rkabs_arr = rkabs_arr
 _rksca_arr = rksca_arr
-
+_rice_sigma_arr = rice_sigma_arr
+_ice_N_bounds = ice_N_bounds
 # Get bounds for this model
 bounds = {}
 for param in model_parameters:
@@ -693,14 +940,25 @@ else:
 	p0_physical = p0_dict[f'ALL:ALL:{model_str}']
 	p0_mfrac = list(mfrac_flat[:-1])
 
-# Combine physical parameters and mass fractions
-p0 = p0_physical + p0_mfrac
+
+p0_ice = []
+if USE_ICE:
+	for k, name in enumerate(ice_species):
+		p0_ice.append(p0_ice_defaults.get(name, 1e16))
+
+# Combine physical parameters, mass fractions and ice column densities
+p0 = p0_physical + p0_mfrac + p0_ice
+
 
 # Number of dimensions
 ndim = len(p0)
 
 print(f"\nMCMC Setup:")
-print(f"  Number of parameters: {ndim} (sampling {Nsizes*Nspecies - 1} of {Nsizes*Nspecies} mass fractions)")
+print(f"  Number of parameters: {ndim}")
+print(f"    Physical + scaling : 6")
+print(f"    Mass fractions     : {Nsizes*Nspecies - 1} (sampled) + 1 (dependent)")
+if USE_ICE:
+	print(f"    Ice N columns      : {Nice}  ({', '.join(ice_species)})")
 print(f"  Number of walkers: {NWALKERS}")
 print(f"  Number of steps: {NSTEPS}")
 print(f"  Burn-in steps: {NBURN}")
@@ -720,7 +978,7 @@ pos = initialize_walkers(p0, NWALKERS, ndim, bounds)
 if USE_PARALLEL:
 	print(f"Running MCMC with {NCORES} cores...")
 	with Pool(NCORES) as pool:
-		moves = emcee.moves.StretchMove(a=1.5)
+		moves = emcee.moves.StretchMove(a=1.3)
 		sampler = emcee.EnsembleSampler(NWALKERS, ndim, log_probability, pool=pool, moves=moves)
 		sampler.run_mcmc(pos, NSTEPS, progress=True)
 else:
@@ -756,8 +1014,17 @@ else:
 	n_removed = 0
 
 # Reconstruct the dependent mass fraction
-mfrac_dependent = 1.0 - np.sum(flat_samples_sampled[:, 6:], axis=1, keepdims=True)
-flat_samples_full = np.hstack([flat_samples_sampled, mfrac_dependent])
+mfrac_dependent = 1.0 - np.sum(flat_samples_sampled[:, 6:6 + _n_mfrac_params], axis=1, keepdims=True)
+# Assemble full samples: physical + all mass fracs + ice
+flat_samples_full = np.hstack([
+	flat_samples_sampled[:, :6 + _n_mfrac_params],   # physical + independent mfracs
+	mfrac_dependent,                                   # dependent mfrac
+])
+if USE_ICE:
+	flat_samples_full = np.hstack([
+		flat_samples_full,
+		flat_samples_sampled[:, 6 + _n_mfrac_params:],  # ice column densities
+	])
 
 # Calculate chi2_red
 n_data = len(fit_flux)
@@ -782,7 +1049,10 @@ df['ID'] = np.arange(len(df))
 df = df[['ID', 'chi2_red'] + param_names_all]
 
 # Save to CSV
-output_filename = output_foldername + f'fitting_results_{source_name}_{aperture}.csv'
+if DO_CRYSTALS:
+	output_filename = output_foldername + f'fitting_results_crys_{source_name}_{aperture}.csv'
+else:
+	output_filename = output_foldername + f'fitting_results_nocrys_{source_name}_{aperture}.csv'
 df.to_csv(output_filename, index=False)
 print(f"Saved to: {output_filename}")
 
