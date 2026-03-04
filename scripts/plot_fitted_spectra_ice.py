@@ -85,31 +85,7 @@ def cavity_model_mfrac(wav, temp, scaling, temp2, scaling2, surface_density, Jv_
 def source_function(wav, temp, kabs, ksca, F_source):
 	return (kabs * blackbody_intensity(wav, temp) + ksca * F_source) / (kabs + ksca)
 
-############################################################
-#														   #	
-#	 INITIALIZE OPACITIES				 				   #
-#														   #
-############################################################
 
-opacity_foldername = '/home/vorsteja/Documents/JOYS/JDust/optool_opacities/'
-
-grain_species = ['olmg50','pyrmg70','for','ens'] 
-Nspecies = len(grain_species)
-grain_sizes = [0.1,1.5]
-Nsizes = len(grain_sizes)
-
-header,wave,kappa_abs,kappa_scat,g = read_optool(opacity_foldername + '%s_%.1fum.dat'%(grain_species[0],grain_sizes[0]))
-
-kabs_arr = np.zeros((len(grain_sizes),len(grain_species),len(wave)))
-ksca_arr = np.zeros((len(grain_sizes),len(grain_species),len(wave)))
-	
-for i,gsize in enumerate(grain_sizes):
-	for j,gspecies in enumerate(grain_species):
-		op_fn = opacity_foldername+ '%s_%.1fum.dat'%(gspecies,gsize)
-		header,wave,kappa_abs,kappa_scat,g = read_optool(op_fn)
-		
-		kabs_arr[i][j] = kappa_abs
-		ksca_arr[i][j] = kappa_scat
 
 ############################################################
 #														   #	
@@ -152,7 +128,42 @@ if USE_ICE:
 fit_wavelengths = [[4.7,14.66],[16,27.5]]
 
 source_name = 'L1448MM1'
-aperture = 'B1'
+aperture = 'C1'
+DO_CRYSTALS = True
+UNCERTAINTY_MULTIPLYER = 1
+
+
+############################################################
+#														   #	
+#	 INITIALIZE OPACITIES				 				   #
+#														   #
+############################################################
+
+opacity_foldername = '/home/vorsteja/Documents/JOYS/JDust/optool_opacities/'
+
+if DO_CRYSTALS:
+	grain_species = ['olmg50','pyrmg70','for','ens'] 
+else:
+	grain_species = ['olmg50','pyrmg70']
+Nspecies = len(grain_species)
+grain_sizes = [0.1,1.5]
+Nsizes = len(grain_sizes)
+
+header,wave,kappa_abs,kappa_scat,g = read_optool(opacity_foldername + '%s_%.1fum.dat'%(grain_species[0],grain_sizes[0]))
+
+kabs_arr = np.zeros((len(grain_sizes),len(grain_species),len(wave)))
+ksca_arr = np.zeros((len(grain_sizes),len(grain_species),len(wave)))
+	
+for i,gsize in enumerate(grain_sizes):
+	for j,gspecies in enumerate(grain_species):
+		op_fn = opacity_foldername+ '%s_%.1fum.dat'%(gspecies,gsize)
+		header,wave,kappa_abs,kappa_scat,g = read_optool(op_fn)
+		
+		kabs_arr[i][j] = kappa_abs
+		ksca_arr[i][j] = kappa_scat
+
+
+
 
 if source_name == 'L1448MM1':
 	input_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/spectra/extracted_paper/'
@@ -210,6 +221,9 @@ apsize = aper_sizes[np.where(aper_names==aperture)][0]
 arcsec2_to_ster = 2.35e-11
 aparea = np.pi * apsize**2 * arcsec2_to_ster  # arcsec^2 --> sr
 
+unc_rad *= UNCERTAINTY_MULTIPLYER
+fit_unc *= UNCERTAINTY_MULTIPLYER
+
 f_rad    /= aparea
 unc_rad  /= aparea
 fit_flux /= aparea
@@ -242,7 +256,11 @@ mfrac_arr = np.zeros((len(grain_sizes),len(grain_species)))
 
 best_fit_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/output-files/L1448MM1_paper_draft/cavity_modelling/'
 
-fn = best_fit_foldername + 'summary_percentiles.csv'
+
+if DO_CRYSTALS:
+	fn = best_fit_foldername + 'summary_percentiles_crys.csv'
+else:
+	fn = best_fit_foldername + 'summary_percentiles_nocrys.csv'
 
 df = pd.read_csv(fn)
 ind = np.where(np.logical_and(df['sourcename'] == source_name,df['aperture']==aperture))[0][0]
@@ -301,6 +319,18 @@ ax2    = fig.add_subplot(gs[3])
 model_all_um = cavity_model_mfrac(u_use, temp, scaling, temp2, scaling2, surface_density, Jv_Scale,
 								  mfrac_arr, rkabs_arr_all, rksca_arr_all, tau_ice=tau_ice_all)
 
+if DO_CRYSTALS:
+	fn_model = './model_%s_crys.csv'%(aperture)
+else:
+	fn_model = './model_%s_nocrys.csv'%(aperture)
+
+dfmodel = pd.DataFrame(columns = ['um','model'])
+dfmodel['um'] = u_use
+dfmodel['model'] = model_all_um
+dfmodel.to_csv(fn_model)
+print('Saved model to %s'%(fn_model))
+
+
 # Model without ice for comparison
 model_all_um_noice = cavity_model_mfrac(u_use, temp, scaling, temp2, scaling2, surface_density, Jv_Scale,
 										mfrac_arr, rkabs_arr_all, rksca_arr_all, tau_ice=None)
@@ -321,10 +351,10 @@ kabs = weighted_kappa(mfrac_arr, rkabs_arr_all)
 ksca = weighted_kappa(mfrac_arr, rksca_arr_all)
 
 # Top plot - SED
-ax.plot(u_use, model_all_um, color='red', label='Model (with ice)\n' + param_str,zorder=1)
+ax.plot(u_use, model_all_um, color='red', label='Model (with ice)\n' + param_str,zorder=5,lw=2)
 if USE_ICE:
 	ax.plot(u_use, model_all_um_noice, color='orange', linestyle=':', label='Model (no ice)', alpha=0.7)
-ax.plot(fit_um, fit_flux, color='blue', label='Fitted Data',alpha=0.5,zorder=0)
+ax.plot(fit_um, fit_flux, color='blue', label='Fitted Data',alpha=0.5,zorder=0,lw=0.5)
 ax.fill_between(fit_um, fit_flux-fit_unc, fit_flux, color='blue', alpha=0.5)
 ax.fill_between(fit_um, fit_flux, fit_flux+fit_unc, color='blue', alpha=0.5)
 
@@ -369,8 +399,8 @@ ax.set_ylabel('Flux')
 # Middle plot - Residuals
 model_eval = cavity_model_mfrac(fit_um, temp, scaling, temp2, scaling2, surface_density, Jv_Scale,
 								mfrac_arr, rkabs_arr, rksca_arr, tau_ice=tau_ice_fit)
-relative_unc = (fit_flux - model_eval) / (3*fit_unc)
-ax_mid.plot(fit_um, relative_unc, 'o-', color='blue', markersize=3)
+relative_unc = (fit_flux - model_eval) / (fit_unc)
+ax_mid.plot(fit_um, relative_unc, 'o-', color='blue', markersize=1)
 ax_mid.set_xlabel('Wavelength (μm)')
 ax_mid.set_ylabel('F - Model / uncertainty')
 ax_mid.grid(True, alpha=0.3)

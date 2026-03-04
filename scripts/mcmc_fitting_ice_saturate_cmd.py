@@ -95,6 +95,231 @@ def cavity_model_mfrac(wav,temp,scaling,temp2,scaling2,surface_density,Jv_Scale,
 def source_function(wav,temp,kabs,ksca,F_source):
 	return (kabs*blackbody_intensity(wav,temp) + ksca*F_source)/(kabs+ksca)
 
+def make_prerun_diagnostic_plot(u_use, f_rad, unc_rad, fit_um, fit_flux, fit_unc,
+                                saturated_mask, p0, source_name, aperture, model_str,
+                                output_foldername, cavity_model_mfrac,
+                                mfrac_arr_p0, rkabs_arr_p0, rksca_arr_p0,
+                                rice_sigma_arr_p0=None, ice_params_p0=None):
+    '''
+    Generate a pre-run diagnostic plot before MCMC sampling begins.
+
+    Shows the full spectrum with the fit wavelength grid and saturated channels
+    highlighted (Panel 1), and the initial guess model overlaid on the full
+    spectrum (Panel 2). Saves to output_foldername and calls plt.show().
+
+    Parameters
+    ----------
+    u_use : array
+        Full wavelength array in um (unmasked, surface brightness units).
+    f_rad : array
+        Full flux array in MJy sr^-1.
+    unc_rad : array
+        Full uncertainty array in MJy sr^-1.
+    fit_um : array
+        Wavelength array used for fitting (line-masked, wavelength-cut).
+    fit_flux : array
+        Flux array used for fitting.
+    fit_unc : array
+        Uncertainty array used for fitting.
+    saturated_mask : boolean array
+        True where fit_flux / fit_unc < Nsigma_sat, on fit_um grid.
+    p0 : array
+        Initial guess parameter vector.
+    source_name : str
+        Source name for title and filename.
+    aperture : str
+        Aperture name for title and filename.
+    model_str : str
+        Model name string for title.
+    output_foldername : str
+        Folder to save the diagnostic figure.
+    cavity_model_mfrac : callable
+        Model function with signature (wav, temp, scaling, temp2, scaling2,
+        surface_density, Jv_Scale, mfrac_arr, kabs_arr, ksca_arr, tau_ice).
+    mfrac_arr_p0 : array
+        Nsizes x Nspecies mass fraction array from p0.
+    rkabs_arr_p0 : array
+        Absorption opacity array regridded to u_use.
+    rksca_arr_p0 : array
+        Scattering opacity array regridded to u_use.
+    rice_sigma_arr_p0 : list of arrays, optional
+        Ice cross-sections regridded to u_use. None means no ice.
+    ice_params_p0 : array, optional
+        Ice column density initial guesses. None means no ice.
+    '''
+    from scipy.interpolate import interp1d
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+
+    C_DATA    = 'steelblue'
+    C_MODEL   = 'tomato'
+    C_FIT     = 'black'
+    C_SAT     = 'steelblue'
+    ALPHA_FULL = 0.35
+    LW_THIN   = 0.6
+    LW_THICK  = 1.0
+
+    FONTSIZE_LABEL  = 8
+    FONTSIZE_LEGEND = 7
+    FONTSIZE_TICK   = 7
+    FONTSIZE_TITLE  = 8
+
+    # --- Evaluate initial guess model on u_use grid ---
+    # Regrid opacities to u_use
+    from spectres import spectres as _spectres
+    import numpy as _np
+
+    def _regrid_kappas_to(wave_orig, kappa_arr, new_wave):
+        Nsizes, Nspecies, _ = _np.shape(kappa_arr)
+        out = _np.zeros((Nsizes, Nspecies, len(new_wave)))
+        for i in range(Nsizes):
+            for j in range(Nspecies):
+                out[i][j] = _spectres(new_wave, wave_orig, kappa_arr[i][j])
+        return out
+
+    # Build ice tau on u_use grid
+    if rice_sigma_arr_p0 is not None and ice_params_p0 is not None:
+        tau_ice_full = np.zeros(len(u_use))
+        for k, (sigma, N_ice) in enumerate(zip(rice_sigma_arr_p0, ice_params_p0)):
+            # sigma may be on fit_um — interpolate to u_use
+            interp = interp1d(fit_um, sigma, bounds_error=False, fill_value=0.0)
+            tau_ice_full += N_ice * interp(u_use)
+    else:
+        tau_ice_full = np.zeros(len(u_use))
+
+    # Regrid kappas to u_use
+    # Use global wave (optool grid) — passed implicitly via closure in original script
+    # Here we interpolate rkabs_arr_p0 from fit_um to u_use
+    Nsizes_p0, Nspecies_p0, _ = np.shape(rkabs_arr_p0)
+    kabs_full = np.zeros((Nsizes_p0, Nspecies_p0, len(u_use)))
+    ksca_full = np.zeros((Nsizes_p0, Nspecies_p0, len(u_use)))
+    for i in range(Nsizes_p0):
+        for j in range(Nspecies_p0):
+            kabs_full[i][j] = interp1d(fit_um, rkabs_arr_p0[i][j],
+                                        bounds_error=False, fill_value='extrapolate')(u_use)
+            ksca_full[i][j] = interp1d(fit_um, rksca_arr_p0[i][j],
+                                        bounds_error=False, fill_value='extrapolate')(u_use)
+
+    temp, scaling, temp2, scaling2, surface_density, Jv_Scale = p0[:6]
+
+    try:
+        model_full = cavity_model_mfrac(
+            u_use, temp, scaling, temp2, scaling2,
+            surface_density, Jv_Scale, mfrac_arr_p0,
+            kabs_full, ksca_full, tau_ice_full
+        )
+    except Exception as e:
+        print('Warning: could not evaluate initial guess model on full grid: %s' % e)
+        model_full = np.full(len(u_use), np.nan)
+
+    # --- Identify fit and non-fit channels on u_use grid ---
+    fit_um_set = set(np.round(fit_um, 6))
+    in_fit = np.array([round(w, 6) in fit_um_set for w in u_use])
+
+    # --- Find saturated channels on u_use grid ---
+    # Interpolate saturation mask from fit_um to u_use (nearest neighbour)
+    sat_interp = interp1d(fit_um, saturated_mask.astype(float),
+                          kind='nearest', bounds_error=False, fill_value=0.0)
+    sat_full = sat_interp(u_use).astype(bool)
+
+    # --- Build plot arrays ---
+    # Detected on fit grid: in_fit and not saturated
+    detected_full = in_fit & ~sat_full
+    undetected_full = in_fit & sat_full
+    outside_full = ~in_fit
+
+    f_det   = f_rad.copy().astype(float)
+    f_det[~detected_full] = np.nan
+
+    f_out   = f_rad.copy().astype(float)
+    f_out[~outside_full] = np.nan
+
+    unc_det   = unc_rad.copy().astype(float)
+    unc_det[~detected_full] = np.nan
+
+    unc_undet = unc_rad.copy().astype(float)
+    unc_undet[~undetected_full] = np.nan
+
+    # --- Find contiguous saturated blocks on fit_um for upper limit markers ---
+    blocks   = []
+    in_block = False
+    flagged  = saturated_mask
+    for idx in range(len(flagged)):
+        if flagged[idx] and not in_block:
+            block_start = idx
+            in_block    = True
+        elif not flagged[idx] and in_block:
+            blocks.append((block_start, idx - 1))
+            in_block = False
+    if in_block:
+        blocks.append((block_start, len(flagged) - 1))
+
+    # --- Figure ---
+    panel_height = 3.46 * 0.5
+    fig, axes = plt.subplots(2, 1, figsize=(3.46 * 2, panel_height * 2), sharex=True)
+    fig.subplots_adjust(hspace=0.08)
+    fig.suptitle('%s  |  Aperture %s  |  Model %s' % (source_name, aperture, model_str),
+                 fontsize=FONTSIZE_TITLE)
+
+    for ax_idx, ax in enumerate(axes):
+
+        # Outside fit range — faint
+        ax.plot(u_use, f_out,
+                color=C_DATA, lw=LW_THIN, alpha=ALPHA_FULL, zorder=2)
+
+        # Detected in fit range
+        ax.plot(u_use, f_det,
+                color=C_DATA, lw=LW_THIN, alpha=0.9, zorder=4,
+                label=r'$F_\nu$ (fit range)' if ax_idx == 0 else None)
+
+        # Saturation floor — grey where detected, black thick where undetected
+        sat_floor_det   = Nsigma_sat * unc_det
+        sat_floor_undet = Nsigma_sat * unc_undet
+
+        ax.plot(u_use, sat_floor_det,
+                color='grey', lw=0.5, alpha=0.8, zorder=3,
+                label=r'$N_{\sigma}\,\sigma_{\rm pipe}$' if ax_idx == 0 else None)
+
+        ax.plot(u_use, sat_floor_undet,
+                color=C_FIT, lw=LW_THICK, alpha=1.0, zorder=3)
+
+        # Upper limit markers and fills for saturated blocks
+        for block_start, block_end in blocks:
+            block_um    = fit_um[block_start:block_end + 1]
+            block_floor = Nsigma_sat * fit_unc[block_start:block_end + 1]
+
+            ax.fill_between(block_um, block_floor * 1e-3, block_floor,
+                            color=C_SAT, alpha=0.08, zorder=1)
+
+            block_len     = block_end - block_start + 1
+            arrow_indices = [block_start + block_len // 2] if block_len < 20 else [block_start, block_end]
+            for aidx in arrow_indices:
+                ax.plot(fit_um[aidx], Nsigma_sat * fit_unc[aidx],
+                        marker='v', ms=2.5, color=C_SAT, alpha=0.9, zorder=5)
+
+        # Initial guess model — panel 2 only
+        if ax_idx == 1:
+            ax.plot(u_use, model_full,
+                    color=C_MODEL, lw=LW_THICK, alpha=0.9, zorder=6,
+                    label='Initial guess')
+
+        ax.set_yscale('log')
+        ax.set_xlim(4.7, 27.5)
+        ax.set_ylabel(r'$I_\nu$ (MJy sr$^{-1}$)', fontsize=FONTSIZE_LABEL)
+        ax.tick_params(labelsize=FONTSIZE_TICK)
+        ax.legend(fontsize=FONTSIZE_LEGEND, loc='upper left', ncol=3, frameon=False)
+
+    axes[0].set_title('Data + fit range + saturation mask', fontsize=FONTSIZE_LABEL, pad=2)
+    axes[1].set_title('Initial guess model', fontsize=FONTSIZE_LABEL, pad=2)
+    axes[-1].set_xlabel(r'Wavelength ($\mu$m)', fontsize=FONTSIZE_LABEL)
+    axes[-1].tick_params(labelsize=FONTSIZE_TICK)
+
+    savepath = output_foldername + 'prerun_diagnostic_%s_%s.png' % (source_name, aperture)
+    plt.savefig(savepath, bbox_inches='tight', dpi=150)
+    plt.show()
+    plt.close()
+    print('Saved diagnostic plot to %s' % savepath)
 
 
 ############################################################
@@ -205,16 +430,13 @@ def check_burn_in_adequacy(sampler, requested_burnin, param_names):
 	
 	return recommended_burnin, is_adequate
 
-def print_mcmc_summary(flat_samples, flat_log_prob, param_names_sampled, param_names_all, n_data, ndim, n_removed=0):
+def print_mcmc_summary(flat_samples, flat_log_prob, param_names_sampled, param_names_all, chi2_red, ndim, n_removed=0):
 	print("\n" + "="*80)
 	print("MCMC SUMMARY")
 	print("="*80)
 	print(f"Total samples (after burn-in, thinning, outlier removal): {len(flat_samples)}")
 	if n_removed > 0:
 		print(f"Outlier walkers removed: {n_removed}")
-	
-	dof = n_data - ndim
-	chi2_red = -2 * flat_log_prob / dof
 	
 	print(f"\nReduced χ² statistics:")
 	print(f"  Median: {np.median(chi2_red):.3f}")
@@ -401,8 +623,12 @@ print("="*80 + "\n")
 
 kp5_filename = "/home/vorsteja/Documents/JOYS/Collaborator_Scripts/Sam_Extinction/KP5_benchmark_RNAAS.csv"
 opacity_foldername = '/home/vorsteja/Documents/JOYS/JDust/optool_opacities/'
+ice_absorption_foldername = '/home/vorsteja/Documents/JOYS/JDust/ifu_analysis/input-files/absorption/'
+
 
 DO_CRYSTALS = False
+UNC_MULTIPLYER = 1
+Nsigma_sat = 2.5
 
 if DO_CRYSTALS:
 	grain_species = ['olmg50','pyrmg70','for','ens']
@@ -415,33 +641,15 @@ Nsizes = len(grain_sizes)
 #Wavelength to fit.
 fit_wavelengths = [[4.7,14.66],[16,27.5]]
 
-#Wavelength ranges to calculate reduced chi2
-chi_ranges = [[4.93,5.6],[7.7,8],[8.5,11.5],[12,14],[15.7,17],[19,20.5]]
-
 #If you want to regrid spectra to finer resolution before fitting. WARNING: This arbitrarily reduces uncertainties on measurments, giving over-accurate MCMC constraints.
 spectral_resolution = None 
 
 ############################################################
 #														   #	
 #	 ICE PARAMETERS                                        #
+#                                                          #                                                         #
+#   Set ice_species = [] to run without ice                #
 #                                                          #
-#   ice_species : list of strings, names for output       #
-#   ice_filenames : list of paths to lab absorbance files  #
-#                                                          #
-#   Expected file format (two columns, space or comma     #
-#   separated):                                            #
-#       col 0 : wavelength in micron OR wavenumber in     #
-#               cm^-1 (set ice_input_units below)         #
-#       col 1 : absorbance cross-section sigma in         #
-#               cm^2 molecule^-1 (per molecule)           #
-#                                                         #
-#   N_ice bounds (molecules cm^-2):                       #
-#       ice_N_lower : lower bound for all species         #
-#       ice_N_upper : upper bound for all species         #
-#       Override per-species in ice_N_bounds_dict below   #
-#                                                         #
-#   Set ice_species = [] to run without ice               #
-#                                                         #
 ############################################################
 
 # Initial guess for ice scaling factors — physically motivated literature values
@@ -451,12 +659,14 @@ p0_ice_defaults = {
 	'H2O 150K'  : 0.5
 }
 
-h2o_foldername = '/home/vorsteja/Documents/JOYS/Collaborator_Scripts/Contsub/'
-
 ice_species   = ['H2O 15K', 'H2O 150K']
 ice_filenames = [
-	h2o_foldername + '2023-08-18_hdo-h2o_1-200_thin(118)_154_blcorr.csv',
-	h2o_foldername + '2023-08-18_hdo-h2o_1-200_thin(27)_1500_blcorr.csv'
+	#ice_absorption_foldername + 'LEIDEN_pure_water_ice_15K_wavenumber.csv',
+	#ice_absorption_foldername + 'LEIDEN_pure_water_ice_75K_wavenumber.csv'
+
+	ice_absorption_foldername  + '2023-08-18_hdo-h2o_1-200_thin(27)_1500_blcorr.csv',
+	ice_absorption_foldername + '2023-08-18_hdo-h2o_1-200_thin(118)_154_blcorr.csv'
+
 ]
 
 # Input wavelength units for each file: 'um' or 'wavenumber'
@@ -518,8 +728,11 @@ for name in ice_species:
 
 # MCMC settings
 NWALKERS = 64
-NSTEPS = 700000
-NBURN = 200000
+if DO_CRYSTALS:
+	NSTEPS = 1000000
+else:
+	NSTEPS = 700000
+NBURN = 300000
 THIN = 20
 USE_PARALLEL = True
 NCORES = 8
@@ -535,7 +748,7 @@ OUTLIER_SIGMA = 3
 
 ############################################################
 #														   #	
-#	 USER DEFINED PARAMETERS SECTION 2/2				   #
+#	 Fitting initial conditions and bounds				   #
 #														   #
 ############################################################
 
@@ -658,6 +871,8 @@ for i,gsize in enumerate(grain_sizes):
 #														   #
 ############################################################
 
+
+#Global variables for use in MCMC.
 _fit_um = None
 _fit_flux = None
 _fit_unc = None
@@ -681,29 +896,35 @@ def log_prior(theta):
 	
 	log_prob = 0.0
 	
+	#Uniform
 	if not (_bounds['T1'][0] <= temp <= _bounds['T1'][1]):
 		return -np.inf
 	if not (_bounds['T2'][0] <= temp2 <= _bounds['T2'][1]):
 		return -np.inf
 	
+	#Log uniform
 	if not (_bounds['O1'][0] <= scaling <= _bounds['O1'][1]):
 		return -np.inf
 	else:
 		log_prob += -np.log(scaling)
 	
+	#Log uniform
 	if not (_bounds['O2'][0] <= scaling2 <= _bounds['O2'][1]):
 		return -np.inf
 	else:
 		log_prob += -np.log(scaling2)
 	
+	#Log uniform
 	if not (_bounds['O_star'][0] <= Jv_Scale <= _bounds['O_star'][1]):
 		return -np.inf
 	else:
 		log_prob += -np.log(Jv_Scale)
 	
+	#Uniform
 	if not (_bounds['SD_LOS'][0] <= surface_density <= _bounds['SD_LOS'][1]):
 		return -np.inf
 	
+	#Make sure the mass fractions stay between 0 and 1.
 	if np.any(mfrac_independent < 0):
 		return -np.inf
 	
@@ -714,7 +935,7 @@ def log_prior(theta):
 	if mfrac_dependent < 0:
 		return -np.inf
 
-	# Ice column density priors — uniform
+	# Ice scaling priors - linear uniform
 	if USE_ICE:
 		N_ice_params = theta[6 + _n_mfrac_params:]
 		for k, N_ice in enumerate(N_ice_params):
@@ -742,6 +963,7 @@ def log_likelihood(theta):
 		tau_ice = np.zeros(len(_fit_um))
 		for k, N_ice in enumerate(N_ice_params):
 			tau_ice += N_ice * _rice_sigma_arr[k]
+
 	else:
 		tau_ice = np.zeros(len(_fit_um))
 
@@ -765,7 +987,7 @@ def log_likelihood(theta):
 	# Saturated channels — one-sided likelihood
 	# Model must predict flux below observed floor, penalized for predicting above
 	log_like_saturated = np.sum(
-		norm.logsf(_fit_flux[_saturated_mask],
+		norm.logsf(Nsigma_sat * _fit_unc[_saturated_mask],
 				   loc=model_eval[_saturated_mask],
 				   scale=_fit_unc[_saturated_mask])
 	)
@@ -869,7 +1091,12 @@ prepared_spectra = prepare_spectra_for_fit(u_use,f_use,unc_use,fit_wavelengths,u
 spectra_cols = ['um','flux','unc']
 fit_um,fit_flux,fit_unc = [prepared_spectra['fitdata:%s'%(x)] for x in spectra_cols]
 
+fit_unc *= UNC_MULTIPLYER
+
+
 u_use,f_rad,unc_rad = [prepared_spectra['unmasked:%s'%(x)] for x in spectra_cols]
+
+unc_rad *= UNC_MULTIPLYER
 
 
 #Convert flux densities to surface brightness.
@@ -879,8 +1106,8 @@ unc_rad /= aparea
 fit_flux /= aparea
 fit_unc /= aparea
 
-# Define saturated mask — channels where SNR < 2.5 (silicate feature floor)
-saturated_mask = (fit_flux / fit_unc) < 2.5
+# Define saturated mask — channels where SNR < Nsigma_sat (silicate feature floor)
+saturated_mask = (fit_flux / fit_unc) < Nsigma_sat
 _saturated_mask = saturated_mask
 print(f"\nSaturated channels: {np.sum(saturated_mask)} of {len(fit_flux)}")
 print(f"Saturated wavelength range: {fit_um[saturated_mask].min():.2f} - {fit_um[saturated_mask].max():.2f} um")
@@ -895,6 +1122,10 @@ if USE_ICE:
 	print("Regridding ice cross-sections to fit wavelength grid...")
 	for k, (name, wav_ice, sigma_ice) in enumerate(zip(ice_species, ice_wav_list, ice_sigma_list)):
 		sigma_regrid = regrid_ice(wav_ice, sigma_ice, fit_um)
+
+		plt.plot(fit_um,sigma_regrid)
+		plt.show()
+
 		rice_sigma_arr.append(sigma_regrid)
 		n_nonzero = np.sum(sigma_regrid > 0)
 		print(f"  {name:8s}: {n_nonzero}/{len(fit_um)} wavelength channels have non-zero absorbance")
@@ -987,6 +1218,20 @@ print(f"  Initial log probability: {log_probability(p0):.2f}")
 if not np.isfinite(log_probability(p0)):
 	print(WARNING + "WARNING: Initial guess has invalid log probability!" + ENDC)
 
+# Build p0 mfrac_arr for diagnostic
+mfrac_p0_flat = np.array(p0_mfrac + [1.0 - sum(p0_mfrac)])
+mfrac_arr_p0  = mfrac_p0_flat.reshape(Nsizes, Nspecies)
+
+make_prerun_diagnostic_plot(
+    u_use, f_rad, unc_rad, fit_um, fit_flux, fit_unc,
+    saturated_mask, p0, source_name, aperture, model_str,
+    output_foldername, cavity_model_mfrac,
+    mfrac_arr_p0, rkabs_arr, rksca_arr,
+    rice_sigma_arr_p0=rice_sigma_arr if USE_ICE else None,
+    ice_params_p0=p0_ice if USE_ICE else None
+)
+
+
 # Initialize walkers
 print("\nInitializing walkers...")
 pos = initialize_walkers(p0, NWALKERS, ndim, bounds)
@@ -1074,7 +1319,7 @@ def log_likelihood_normal_only(theta):
 chi2_red = np.array([-2 * log_likelihood_normal_only(s) / dof for s in flat_samples_sampled])
 
 # Print summary
-print_mcmc_summary(flat_samples_full, flat_log_prob, param_names_sampled, param_names_all, n_data, ndim, n_removed)
+print_mcmc_summary(flat_samples_full, flat_log_prob, param_names_sampled, param_names_all, chi2_red, ndim, n_removed)
 
 ###############################
 # Save results
