@@ -211,7 +211,7 @@ def automatic_continuum_cube(fn,num_std = 3 ,lam = 1e4,scale=5,saveto='',saveto_
 	unc_cont_cube = np.full(cube_shp,np.nan)
 	dq_cont_cube = np.full(cube_shp,np.nan)
 
-	if (1):
+	if (0):
 		ra, dec, wcs = ['03h25m38.8898s','+30d44m05.612s', WCS(hdr)]
 		ra, dec, wcs = ['03h25m38.7708s','+30d44m08.823s', WCS(hdr)]
 		plot_coords = radec_to_pixels(ra, dec, wcs.dropaxis(2))

@@ -434,7 +434,7 @@ def get_cube_offsets_scaling(um,data_cube,unc_cube,subband,mask_method,base_fact
 		df.to_csv(saveto_psf_gen)
 
 
-	return x_offset_arr,y_offset_arr,scaling_arr,mask
+	return cs_xoffset(um),cs_yoffset(um),cs_scaling(um),mask
 
 def get_options_csv_fn(output_foldername, source_name, fn_band):
 	'''
